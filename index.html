@@ -160,29 +160,19 @@
   <!-- DETALLE DE UN INMUEBLE -->
   <section class="tab" id="tab-detalle">
     <button class="back" id="btnVolver">‹ Inmuebles</button>
+    <div id="detHead"></div>
     <div class="seg" id="segDet">
-      <button data-s="admin" class="on">Administrador</button>
+      <button data-s="ingresos" class="on">Ingresos</button>
+      <button data-s="egresos">Egresos</button>
+      <button data-s="admin">Admón.</button>
       <button data-s="inventario">Inventario</button>
-      <button data-s="datos">Datos y saldo</button>
     </div>
-    <div id="detAdmin"></div>
+    <div id="detIngresos"></div>
+    <div id="detEgresos" class="hide"></div>
+    <div id="detAdmin" class="hide"></div>
     <div id="detInventario" class="hide"></div>
-    <div id="detDatos" class="hide"></div>
   </section>
 
-  <!-- INGRESOS -->
-  <section class="tab" id="tab-ingresos">
-    <div class="filters"><input type="month" id="fgMes" aria-label="Mes"><select id="fgInm"></select></div>
-    <div class="card"><div id="listIng"></div></div>
-  </section>
-
-  <!-- EGRESOS -->
-  <section class="tab" id="tab-egresos">
-    <div class="filters"><input type="month" id="feMes" aria-label="Mes"><select id="feInm"></select></div>
-    <div class="filters"><select id="feCon"></select>
-      <select id="feEst"><option value="">Todos los estados</option><option>Pagado</option><option>Pendiente</option></select></div>
-    <div class="card"><div id="listEgr"></div></div>
-  </section>
   <!-- ANÁLISIS ECONÓMICO -->
   <section class="tab" id="tab-analisis">
     <div class="filters"><select id="aAnio" aria-label="Año"></select><select id="aInm" aria-label="Inmueble"></select></div>
@@ -204,8 +194,6 @@
 <nav class="bottom">
   <button class="active" data-tab="resumen"><span class="ic">📊</span>Resumen</button>
   <button data-tab="inmuebles"><span class="ic">🏠</span>Inmuebles</button>
-  <button data-tab="ingresos"><span class="ic">⬇️</span>Ingresos</button>
-  <button data-tab="egresos"><span class="ic">⬆️</span>Egresos</button>
   <button data-tab="analisis"><span class="ic">📈</span>Análisis</button>
 </nav>
 
@@ -265,7 +253,7 @@ const IDB = (() => {
    ===================================================================== */
 const COLS = ["inmuebles","ingresos","egresos","inventario"];
 let D = { v:1, inmuebles:{}, ingresos:{}, egresos:{}, inventario:{} };
-let meta = { lastBackup:null };
+let meta = { lastBackup:null, sucios:{}, cfg:null, ultimaSync:null };
 
 const lista = col => Object.values(D[col]||{}).filter(r => r && !r.del);
 const getR = (col,id) => { const r=D[col]?.[id]; return r && !r.del ? r : null; };
@@ -273,13 +261,13 @@ const getR = (col,id) => { const r=D[col]?.[id]; return r && !r.del ? r : null; 
 async function guardarLocal(){ await IDB.set("datos", D); await IDB.set("meta", meta); }
 
 function poner(col, rec){
-  rec.upd = Date.now(); D[col][rec.id] = rec;
-  meta.dirty = true; guardarLocal(); programarSync(); renderTodo();
+  rec.upd = Date.now(); D[col][rec.id] = rec; marcarSucio(col, rec.id);
+  guardarLocal(); programarSync(); renderTodo();
 }
 function quitar(col, id){
   if(!D[col][id]) return;
-  D[col][id] = { id, del:true, upd:Date.now() };
-  meta.dirty = true; guardarLocal(); programarSync(); renderTodo();
+  D[col][id] = { id, del:true, upd:Date.now() }; marcarSucio(col, id);
+  guardarLocal(); programarSync(); renderTodo();
 }
 function fusionar(a, b){
   const out = { v:1 };
@@ -293,15 +281,135 @@ function fusionar(a, b){
 }
 
 /* =====================================================================
-   ESTADO (los datos viven en este celular; el respaldo es el Excel)
+   BASE DE DATOS COMPARTIDA (Google Sheets)
+   El celular guarda una copia y la sincroniza con la hoja de Google.
    ===================================================================== */
-function programarSync(){ /* sin nube: todo queda guardado en el celular */ }
+const CFG_KEY = "mi_sheets";
+let cfg = (() => { try{ return JSON.parse(localStorage.getItem(CFG_KEY) || "null"); }catch(e){ return null; } })();
+let syncing = false, otraVez = false, syncTimer = null, estadoSync = "idle", ultimoError = "";
+
+function guardarCfg(c){ cfg = c; try{ if(c) localStorage.setItem(CFG_KEY, JSON.stringify(c)); else localStorage.removeItem(CFG_KEY); }catch(e){} meta.cfg = c; guardarLocal(); }
+function marcarSucio(col, id){ (meta.sucios[col] = meta.sucios[col] || {})[id] = true; }
+function marcarTodoSucio(){ for(const c of COLS) for(const id of Object.keys(D[c])) marcarSucio(c, id); }
+const nSucios = () => COLS.reduce((s,c) => s + Object.keys(meta.sucios[c]||{}).length, 0);
+function programarSync(ms = 1500){ if(!cfg) return; clearTimeout(syncTimer); syncTimer = setTimeout(sincronizar, ms); }
+
+function aFila(col, r){
+  if(r.del) return { id:r.id, upd:r.upd, del:true };
+  if(col === "inmuebles"){ const a = r.admin || {};
+    return { id:r.id, upd:r.upd, conjunto:r.conjunto, torre:r.torre, apartamento:r.apartamento, propietario:r.propietario||"", ciudad:r.ciudad||"", notas:r.notas||"",
+      admin_nombre:a.nombre||"", admin_empresa:a.empresa||"", admin_telefono:a.telefono||"", admin_correo:a.correo||"", admin_cuota:a.cuota||"", admin_diaPago:a.diaPago||"", admin_referencia:a.referencia||"", admin_notas:a.notas||"" }; }
+  const f = String(r.fecha || "");
+  return { ...r, inmueble: etq(r.inmuebleId), anio: Number(f.slice(0,4)) || "", mes: Number(f.slice(5,7)) || "" };
+}
+function deFila(col, o){
+  const s = v => v === null || v === undefined ? "" : String(v), n = v => v === "" || v === null || v === undefined ? "" : Number(v);
+  const base = { id:s(o.id), upd:Number(o.upd)||0 };
+  if(col === "inmuebles") return { ...base, conjunto:s(o.conjunto), torre:s(o.torre), apartamento:s(o.apartamento), propietario:s(o.propietario), ciudad:s(o.ciudad), notas:s(o.notas),
+    admin:{ nombre:s(o.admin_nombre), empresa:s(o.admin_empresa), telefono:s(o.admin_telefono), correo:s(o.admin_correo), cuota:n(o.admin_cuota), diaPago:n(o.admin_diaPago), referencia:s(o.admin_referencia), notas:s(o.admin_notas) } };
+  if(col === "ingresos") return { ...base, inmuebleId:s(o.inmuebleId), fecha:s(o.fecha).slice(0,10), concepto:s(o.concepto), valor:Number(o.valor)||0, medio:s(o.medio), notas:s(o.notas) };
+  if(col === "egresos") return { ...base, inmuebleId:s(o.inmuebleId), fecha:s(o.fecha).slice(0,10), concepto:s(o.concepto), periodo:s(o.periodo).slice(0,7), valor:Number(o.valor)||0, estado:s(o.estado)||"Pagado", notas:s(o.notas) };
+  return { ...base, inmuebleId:s(o.inmuebleId), espacio:s(o.espacio), nombre:s(o.nombre), cantidad:Number(o.cantidad)||1, estado:s(o.estado)||"Bueno", descripcion:s(o.descripcion), observaciones:s(o.observaciones), foto:s(o.foto) };
+}
+async function llamarSheets(c, changes){
+  const r = await fetch(c.url, { method:"POST", headers:{ "Content-Type":"text/plain;charset=utf-8" }, body: JSON.stringify({ action:"sync", key:c.key, changes }), redirect:"follow" });
+  const t = await r.text();
+  try{ return JSON.parse(t); }catch(e){ throw Object.assign(new Error("respuesta"), { codigo:"respuesta" }); }
+}
+async function sincronizar(){
+  if(!cfg){ pintarEstado(); return; }
+  if(!navigator.onLine){ estadoSync = "offline"; pintarEstado(); return; }
+  if(syncing){ otraVez = true; return; }
+  syncing = true; estadoSync = "sync"; pintarEstado();
+  try{
+    const changes = {}, enviados = {};
+    for(const c of COLS){
+      changes[c] = []; enviados[c] = {};
+      for(const id of Object.keys(meta.sucios[c] || {})){ const r = D[c][id]; if(r){ changes[c].push(aFila(c, r)); enviados[c][id] = r.upd; } }
+    }
+    const j = await llamarSheets(cfg, changes);
+    if(!j.ok) throw Object.assign(new Error(j.error), { codigo:j.error });
+    // quitar de pendientes lo que se subió y no cambió mientras tanto
+    for(const c of COLS) for(const [id, upd] of Object.entries(enviados[c])) if(D[c][id] && D[c][id].upd === upd) delete meta.sucios[c][id];
+    // traer lo que hay en la hoja
+    for(const c of COLS) for(const o of (j.data[c] || [])){
+      const r = deFila(c, o), l = D[c][r.id];
+      if(!l || (r.upd||0) > (l.upd||0)) D[c][r.id] = r;
+    }
+    for(const t of (j.data._borrados || [])){
+      const l = D[t.col] && D[t.col][t.id];
+      if(l && !l.del && (l.upd||0) <= Number(t.upd)) D[t.col][t.id] = { id:t.id, del:true, upd:Number(t.upd) };
+    }
+    meta.ultimaSync = new Date().toISOString(); estadoSync = "ok"; ultimoError = "";
+    await guardarLocal();
+  }catch(e){
+    console.error(e); estadoSync = "error";
+    ultimoError = e.codigo === "clave" ? "La clave no coincide con la del código en Google." :
+                  e.codigo === "ocupado" ? "La base estaba ocupada; se reintentará." :
+                  e.codigo === "respuesta" ? "Google no respondió como se esperaba. Revisa que la URL termine en /exec y que el acceso sea “Cualquier usuario”." :
+                  "No se pudo conectar con Google Sheets.";
+  }finally{
+    syncing = false; renderTodo();
+    if(otraVez){ otraVez = false; programarSync(300); }
+  }
+}
 function pintarEstado(){
-  const n = lista("inmuebles").length;
-  const dias = meta.lastBackup ? Math.floor((Date.now() - new Date(meta.lastBackup)) / 86400000) : null;
-  const ok = dias !== null && dias < 30;
-  $("syncDot").className = "dot " + (ok ? "ok" : "sync");
-  $("hdrSub").textContent = `${n} inmueble${n===1?"":"s"} · ` + (dias === null ? "sin respaldo en Excel" : dias === 0 ? "respaldo de hoy" : `último respaldo hace ${dias} día${dias===1?"":"s"}`);
+  const dot = $("syncDot"), sub = $("hdrSub"), n = lista("inmuebles").length;
+  const base = `${n} inmueble${n===1?"":"s"} · `;
+  if(!cfg){ dot.className = "dot"; sub.textContent = base + "solo en este celular"; return; }
+  if(estadoSync === "sync"){ dot.className = "dot sync"; sub.textContent = base + "sincronizando…"; return; }
+  if(estadoSync === "error"){ dot.className = "dot"; sub.textContent = base + "error al sincronizar (toca para reintentar)"; return; }
+  if(!navigator.onLine){ dot.className = "dot sync"; sub.textContent = base + "sin internet · se sube al reconectar"; return; }
+  const p = nSucios();
+  dot.className = p ? "dot sync" : "dot ok";
+  sub.textContent = base + (p ? `${p} cambio${p>1?"s":""} por subir` : "base compartida al día");
+}
+$("hdrSub").parentElement.onclick = () => { if(cfg) sincronizar(); else formConexion(); };
+
+function formConexion(){
+  abrirHoja(`<h3>Base de datos compartida</h3>
+    <div class="t2" style="white-space:normal;margin-bottom:4px">Pega la URL de la aplicación web de Google (termina en <b>/exec</b>) y la clave que pusiste en el código.</div>
+    <label>URL de Google Apps Script</label><input id="cUrl" value="${esc(cfg?.url||"")}" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <label>Clave</label><input id="cKey" value="${esc(cfg?.key||"")}" autocomplete="off">
+    <div class="t2" id="cMsg" style="white-space:normal;margin-top:8px"></div>
+    <div class="btns">${cfg?`<button class="btn del" id="cOff">Desconectar</button>`:`<button class="btn sec" id="cCan">Cancelar</button>`}<button class="btn" id="cOk">Probar y conectar</button></div>`);
+  if($("cCan")) $("cCan").onclick = cerrarHoja;
+  if($("cOff")) $("cOff").onclick = async () => { if(await confirmar("Este celular dejará de sincronizarse. Los datos que ya tiene se quedan aquí.", "Desconectar")){ guardarCfg(null); estadoSync = "idle"; renderTodo(); toast("Desconectado"); } };
+  $("cOk").onclick = async () => {
+    const c = { url:$("cUrl").value.trim(), key:$("cKey").value.trim() };
+    if(!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec/.test(c.url)) return ($("cMsg").textContent = "La URL debe empezar por https://script.google.com/ y terminar en /exec");
+    if(!c.key) return ($("cMsg").textContent = "Escribe la clave");
+    $("cOk").disabled = true; $("cMsg").textContent = "Probando la conexión…";
+    try{
+      const j = await llamarSheets(c, {});
+      if(!j.ok){ $("cMsg").textContent = j.error === "clave" ? "La clave no coincide con la que pusiste en el código de Google." : "Error: " + j.error; $("cOk").disabled = false; return; }
+      guardarCfg(c); marcarTodoSucio(); await guardarLocal(); cerrarHoja(); toast("Conectada a la base compartida ✔"); sincronizar();
+    }catch(e){ $("cMsg").textContent = "No se pudo conectar. Revisa la URL (debe terminar en /exec) y que la implementación tenga acceso para “Cualquier usuario”."; $("cOk").disabled = false; }
+  };
+}
+function linkCompartir(){
+  const datos = btoa(unescape(encodeURIComponent(JSON.stringify({ u:cfg.url, k:cfg.key }))));
+  return location.origin + location.pathname + "#conectar=" + datos;
+}
+async function compartirConexion(){
+  if(!cfg) return toast("Primero conecta la base compartida");
+  const url = linkCompartir();
+  const texto = "Abre este enlace para conectarte a nuestra base de Mis Inmuebles:";
+  if(navigator.share){ try{ await navigator.share({ title:"Mis Inmuebles", text:texto, url }); return; }catch(e){ if(e.name === "AbortError") return; } }
+  abrirHoja(`<h3>Compartir con otra persona</h3><div class="t2" style="white-space:normal">Envíale este enlace. Al abrirlo, su app queda conectada a la misma base.</div>
+    <code class="uri" id="shUrl">${esc(url)}</code><div class="btns"><button class="btn sec" id="shCer">Cerrar</button><button class="btn" id="shCopy">Copiar enlace</button></div>`);
+  $("shCer").onclick = cerrarHoja;
+  $("shCopy").onclick = async () => { try{ await navigator.clipboard.writeText(url); toast("Enlace copiado ✔"); }catch(e){ toast("Mantén presionado el enlace para copiarlo"); } };
+}
+function leerEnlaceConexion(){
+  const h = location.hash;
+  if(!h.startsWith("#conectar=")) return false;
+  try{
+    const o = JSON.parse(decodeURIComponent(escape(atob(h.slice(10)))));
+    if(o.u && o.k){ guardarCfg({ url:o.u, key:o.k }); marcarTodoSucio(); history.replaceState(null, "", location.pathname); return true; }
+  }catch(e){ console.warn(e); }
+  history.replaceState(null, "", location.pathname);
+  return false;
 }
 
 /* ---------- fotos (guardadas en el celular) ---------- */
@@ -324,7 +432,7 @@ async function urlFoto(nombre){
   const u = URL.createObjectURL(b); fotoURL.set(nombre, u); return u;
 }
 async function pintarFotos(root){
-  for(const img of root.querySelectorAll("img[data-foto]")){ const u = await urlFoto(img.dataset.foto); if(u) img.src = u; }
+  for(const img of root.querySelectorAll("img[data-foto]")){ const u = await urlFoto(img.dataset.foto); if(u){ img.src = u; img.style.display = ""; const sp = img.previousElementSibling; if(sp) sp.remove(); } }
 }
 $("visor").onclick = () => $("visor").classList.remove("show");
 function verFoto(nombre){ urlFoto(nombre).then(u => { if(u){ $("visorImg").src = u; $("visor").classList.add("show"); } }); }
@@ -332,7 +440,7 @@ function verFoto(nombre){ urlFoto(nombre).then(u => { if(u){ $("visorImg").src =
 /* =====================================================================
    NAVEGACIÓN
    ===================================================================== */
-let tab = "resumen", inmActual = null, segActual = "admin";
+let tab = "resumen", inmActual = null, segActual = "ingresos";
 function irA(t){
   tab = t;
   document.querySelectorAll("nav.bottom button").forEach(x => x.classList.toggle("active", x.dataset.tab === (t==="detalle"?"inmuebles":t)));
@@ -343,10 +451,10 @@ function irA(t){
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("nav.bottom button").forEach(b => b.onclick = () => irA(b.dataset.tab));
-$("fab").onclick = () => { if(tab==="inmuebles") formInmueble(); else if(tab==="ingresos") formIngreso(); else if(tab==="egresos") formEgreso(); };
+$("fab").onclick = () => { if(tab==="inmuebles") formInmueble(); };
 $("btnVolver").onclick = () => irA("inmuebles");
 $("segDet").querySelectorAll("button").forEach(b => b.onclick = () => { segActual = b.dataset.s; renderDetalle(); });
-function abrirDetalle(id, seg){ inmActual = id; if(seg) segActual = seg; renderDetalle(); irA("detalle"); }
+function abrirDetalle(id, seg){ if(id !== inmActual){ filtroDet.ingMes = filtroDet.egrMes = filtroDet.egrEst = ""; } inmActual = id; segActual = seg || "ingresos"; renderDetalle(); irA("detalle"); }
 
 /* hoja modal */
 function abrirHoja(html){ $("sheet").innerHTML = `<div class="grab"></div>` + html; $("overlay").classList.add("show"); document.body.style.overflow = "hidden"; }
@@ -388,12 +496,12 @@ function formInmueble(id){
     const nuevoId = id || uid();
     poner("inmuebles", { ...i, ...v, id: nuevoId });
     cerrarHoja(); toast("Inmueble guardado ✔");
-    if(!id) abrirDetalle(nuevoId, "admin");
+    if(!id) abrirDetalle(nuevoId, "ingresos");
   };
   if(id) $("bDel").onclick = async () => {
     const movs = [...lista("ingresos"), ...lista("egresos"), ...lista("inventario")].filter(x => x.inmuebleId === id);
     if(!(await confirmar(movs.length ? `Este inmueble tiene ${movs.length} registros (movimientos e inventario) que también se eliminarán.` : "Se eliminará este inmueble."))) return;
-    for(const c of ["ingresos","egresos","inventario"]) for(const r of lista(c).filter(x => x.inmuebleId === id)){ if(r.foto) await borrarFoto(r.foto); D[c][r.id] = { id:r.id, del:true, upd:Date.now() }; }
+    for(const c of ["ingresos","egresos","inventario"]) for(const r of lista(c).filter(x => x.inmuebleId === id)){ if(r.foto) await borrarFoto(r.foto); D[c][r.id] = { id:r.id, del:true, upd:Date.now() }; marcarSucio(c, r.id); }
     quitar("inmuebles", id); irA("inmuebles"); toast("Inmueble eliminado");
   };
 }
@@ -407,30 +515,68 @@ function renderInmuebles(){
       const bal = sum(lista("ingresos").filter(x => x.inmuebleId===i.id)) - sum(lista("egresos").filter(x => x.inmuebleId===i.id));
       const nInv = lista("inventario").filter(x => x.inmuebleId===i.id).length;
       return `<div class="item" data-inm="${esc(i.id)}"><div class="av">🏠</div><div class="tx"><div class="t1">Torre ${esc(i.torre)} · Apto ${esc(i.apartamento)}</div>
-        <div class="t2">${esc([i.propietario, nInv ? nInv + " elementos en inventario" : ""].filter(Boolean).join(" · ") || "Toca para ver administrador e inventario")}</div></div>
+        <div class="t2">${esc([i.propietario, nInv ? nInv + " elementos en inventario" : ""].filter(Boolean).join(" · ") || "Toca para ver ingresos, egresos e inventario")}</div></div>
         <div class="amt ${bal>=0?"pos":"neg"}">${fmt(bal)}</div></div>`;
     }).join("") + `</div>`).join("");
   $("listInm").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm));
 }
 
 /* =====================================================================
-   DETALLE: ADMINISTRADOR, INVENTARIO, DATOS
+   DETALLE DEL INMUEBLE: INGRESOS, EGRESOS, ADMINISTRACIÓN, INVENTARIO
    ===================================================================== */
+const filtroDet = { ingMes:"", egrMes:"", egrEst:"" };
 function renderDetalle(){
   const i = getR("inmuebles", inmActual);
   if(!i){ if(tab === "detalle") irA("inmuebles"); return; }
-  $("segDet").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.s === segActual));
-  $("detAdmin").classList.toggle("hide", segActual !== "admin");
-  $("detInventario").classList.toggle("hide", segActual !== "inventario");
-  $("detDatos").classList.toggle("hide", segActual !== "datos");
+  const ing = lista("ingresos").filter(x => x.inmuebleId === i.id), egr = lista("egresos").filter(x => x.inmuebleId === i.id);
+  const tI = sum(ing), tE = sum(egr), pend = egr.filter(e => e.estado === "Pendiente");
 
-  /* --- Administrador --- */
+  /* --- encabezado --- */
+  $("detHead").innerHTML = `<div class="card">
+    <h2><span>${esc(i.conjunto)} · Torre ${esc(i.torre)} · Apto ${esc(i.apartamento)}</span><button class="lnk" id="bEdInm">Editar</button></h2>
+    ${i.propietario || i.ciudad ? `<div class="t2" style="margin:-6px 0 10px;white-space:normal">${esc([i.propietario, i.ciudad].filter(Boolean).join(" · "))}</div>` : ""}
+    <div class="stats3"><div><div class="l">Ingresos</div><div class="v pos">${fmt(tI)}</div></div><div><div class="l">Egresos</div><div class="v neg">${fmt(tE)}</div></div><div><div class="l">Balance</div><div class="v ${tI-tE>=0?"pos":"neg"}">${fmt(tI-tE)}</div></div></div>
+    ${pend.length ? `<div class="wrn" style="margin-top:10px;font-size:13px">⚠ ${pend.length} egreso${pend.length>1?"s":""} pendiente${pend.length>1?"s":""} por ${fmt(sum(pend))}</div>` : ""}
+  </div>`;
+  $("bEdInm").onclick = () => formInmueble(i.id);
+
+  $("segDet").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.s === segActual));
+  for(const [s, el] of [["ingresos","detIngresos"],["egresos","detEgresos"],["admin","detAdmin"],["inventario","detInventario"]]) $(el).classList.toggle("hide", segActual !== s);
+
+  /* --- Ingresos --- */
+  const rI = ing.filter(x => !filtroDet.ingMes || String(x.fecha).startsWith(filtroDet.ingMes)).sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
+  $("detIngresos").innerHTML = `<div class="btns" style="margin:0 0 12px"><button class="btn" id="bAddIng">+ Registrar ingreso</button></div>
+    <div class="filters"><input type="month" id="fIngMes" value="${esc(filtroDet.ingMes)}" aria-label="Filtrar por mes">${filtroDet.ingMes?`<button class="btn sec sm" id="fIngX" style="flex:none">Ver todos</button>`:""}</div>
+    <div class="card">${rI.length ? rI.map(g => `<div class="item" data-ing="${esc(g.id)}"><div class="av" style="background:var(--okbg)">${ICON_ING[g.concepto]||"💵"}</div>
+      <div class="tx"><div class="t1">${esc(g.concepto)}</div><div class="t2">${fechaCorta(g.fecha)}${g.medio?" · "+esc(g.medio):""}${g.notas?" · "+esc(g.notas):""}</div></div>
+      <div class="amt pos">${fmt(g.valor)}</div></div>`).join("") + `<div class="total"><span>Total${filtroDet.ingMes?" del mes":""}</span><span class="pos">${fmt(sum(rI))}</span></div>`
+      : `<div class="empty">${ing.length ? "No hay ingresos en ese mes." : "Aún no hay ingresos para este inmueble."}</div>`}</div>`;
+  $("bAddIng").onclick = () => formIngreso(null, i.id);
+  $("fIngMes").onchange = e => { filtroDet.ingMes = e.target.value; renderDetalle(); };
+  if($("fIngX")) $("fIngX").onclick = () => { filtroDet.ingMes = ""; renderDetalle(); };
+  $("detIngresos").querySelectorAll("[data-ing]").forEach(el => el.onclick = () => formIngreso(el.dataset.ing, i.id));
+
+  /* --- Egresos --- */
+  const rE = egr.filter(x => (!filtroDet.egrMes || String(x.fecha).startsWith(filtroDet.egrMes) || x.periodo === filtroDet.egrMes) && (!filtroDet.egrEst || x.estado === filtroDet.egrEst))
+    .sort((a,b) => (a.estado===b.estado ? 0 : a.estado==="Pendiente" ? -1 : 1) || String(b.fecha).localeCompare(String(a.fecha)));
+  $("detEgresos").innerHTML = `<div class="btns" style="margin:0 0 12px"><button class="btn" id="bAddEgr">+ Registrar egreso</button></div>
+    <div class="filters"><input type="month" id="fEgrMes" value="${esc(filtroDet.egrMes)}" aria-label="Filtrar por mes">
+      <select id="fEgrEst"><option value="">Todos los estados</option><option ${filtroDet.egrEst==="Pagado"?"selected":""}>Pagado</option><option ${filtroDet.egrEst==="Pendiente"?"selected":""}>Pendiente</option></select></div>
+    <div class="card">${rE.length ? rE.map(e => `<div class="item" data-egr="${esc(e.id)}"><div class="av" style="background:var(--badbg)">${ICON_EGR[e.concepto]||"📌"}</div>
+      <div class="tx"><div class="t1">${esc(e.concepto)}${e.periodo?` <span style="font-weight:400;color:var(--muted)">· ${periodoTxt(e.periodo)}</span>`:""}</div>
+      <div class="t2">${fechaCorta(e.fecha)}${e.notas?" · "+esc(e.notas):""}</div></div>
+      <div><div class="amt neg">${fmt(e.valor)}</div><div style="text-align:right"><span class="pill ${e.estado==="Pagado"?"ok":"pend"}">${esc(e.estado)}</span></div></div></div>`).join("") + `<div class="total"><span>Total</span><span class="neg">${fmt(sum(rE))}</span></div>`
+      : `<div class="empty">${egr.length ? "No hay egresos con ese filtro." : "Aún no hay egresos. Registra administración, agua, energía, gas o internet."}</div>`}</div>`;
+  $("bAddEgr").onclick = () => formEgreso(null, { inmuebleId:i.id });
+  $("fEgrMes").onchange = e => { filtroDet.egrMes = e.target.value; renderDetalle(); };
+  $("fEgrEst").onchange = e => { filtroDet.egrEst = e.target.value; renderDetalle(); };
+  $("detEgresos").querySelectorAll("[data-egr]").forEach(el => el.onclick = () => formEgreso(el.dataset.egr));
+
+  /* --- Administración --- */
   const a = i.admin || {};
   const tieneAdmin = Object.values(a).some(v => v);
   const tel = String(a.telefono||"").replace(/[^\d+]/g, "");
-  const inv = lista("inventario").filter(x => x.inmuebleId === i.id);
-  const cnt = e => inv.filter(x => x.estado === e).reduce((s,x) => s + (Number(x.cantidad)||1), 0);
-  const pagosAdm = lista("egresos").filter(e => e.inmuebleId===i.id && e.concepto==="Administración").sort((x,y) => String(y.fecha).localeCompare(String(x.fecha)));
+  const pagosAdm = egr.filter(e => e.concepto==="Administración").sort((x,y) => String(y.fecha).localeCompare(String(x.fecha)));
   $("detAdmin").innerHTML = `
     <div class="card"><h2>Administración del conjunto <button class="lnk" id="bEdAdm">${tieneAdmin?"Editar":"Agregar"}</button></h2>
       ${tieneAdmin ? `<div class="kv">
@@ -445,54 +591,35 @@ function renderDetalle(){
       </div>` : `<div class="empty" style="padding:10px">Registra los datos del administrador del conjunto: nombre, teléfono, correo, cuota y día de pago.</div>`}
       <div class="btns"><button class="btn sec" id="bPagAdm">+ Registrar pago de administración</button></div>
     </div>
-    <div class="card"><h2>Inventario del apartamento <button class="lnk" id="bVerInv">Ver todo ›</button></h2>
-      <div class="stats3">
-        <div><div class="l">Elementos</div><div class="v">${inv.reduce((s,x)=>s+(Number(x.cantidad)||1),0)}</div></div>
-        <div><div class="l">Bueno · Regular</div><div class="v"><span class="pos">${cnt("Bueno")}</span> · <span class="wrn">${cnt("Regular")}</span></div></div>
-        <div><div class="l">Malo</div><div class="v neg">${cnt("Malo")}</div></div>
-      </div>
-      <div class="btns"><button class="btn" id="bAddInv">+ Agregar al inventario</button></div>
-    </div>
     <div class="card"><h2>Últimos pagos de administración</h2>
       ${pagosAdm.length ? pagosAdm.slice(0,6).map(e => `<div class="item" data-egr="${esc(e.id)}"><div class="av" style="background:var(--badbg)">🏢</div><div class="tx"><div class="t1">${esc(periodoTxt(e.periodo) || fechaCorta(e.fecha))}</div><div class="t2">${fechaCorta(e.fecha)}${e.notas?" · "+esc(e.notas):""}</div></div><div><div class="amt neg">${fmt(e.valor)}</div><div style="text-align:right"><span class="pill ${e.estado==="Pagado"?"ok":"pend"}">${esc(e.estado)}</span></div></div></div>`).join("")
         : `<div class="empty" style="padding:10px">Aún no hay pagos de administración registrados.</div>`}
     </div>`;
   $("bEdAdm").onclick = () => formAdmin(i.id);
   $("bPagAdm").onclick = () => formEgreso(null, { inmuebleId:i.id, concepto:"Administración", valor:a.cuota||"" });
-  $("bVerInv").onclick = () => { segActual = "inventario"; renderDetalle(); };
-  $("bAddInv").onclick = () => formInventario(null, i.id);
   $("detAdmin").querySelectorAll("[data-egr]").forEach(el => el.onclick = () => formEgreso(el.dataset.egr));
 
   /* --- Inventario --- */
+  const inv = lista("inventario").filter(x => x.inmuebleId === i.id);
+  const cnt = e => inv.filter(x => x.estado === e).reduce((s,x) => s + (Number(x.cantidad)||1), 0);
   const grupos = {}; inv.sort((x,y) => (x.nombre||"").localeCompare(y.nombre||"", "es")).forEach(x => (grupos[x.espacio||"General"] = grupos[x.espacio||"General"] || []).push(x));
   const orden = Object.keys(grupos).sort((x,y) => { const ix = ESPACIOS.indexOf(x), iy = ESPACIOS.indexOf(y); return (ix<0?99:ix) - (iy<0?99:iy) || x.localeCompare(y); });
-  $("detInventario").innerHTML = `<div class="btns" style="margin:0 0 12px"><button class="btn" id="bAddInv2">+ Agregar elemento</button></div>` +
+  $("detInventario").innerHTML = `<div class="btns" style="margin:0 0 12px"><button class="btn" id="bAddInv">+ Agregar elemento</button></div>
+    ${inv.length ? `<div class="card"><div class="stats3">
+      <div><div class="l">Elementos</div><div class="v">${inv.reduce((s,x)=>s+(Number(x.cantidad)||1),0)}</div></div>
+      <div><div class="l">Bueno · Regular</div><div class="v"><span class="pos">${cnt("Bueno")}</span> · <span class="wrn">${cnt("Regular")}</span></div></div>
+      <div><div class="l">Malo</div><div class="v neg">${cnt("Malo")}</div></div></div></div>` : ""}` +
     (inv.length ? orden.map(g => `<div class="group-h">${esc(g)}</div><div class="card">` + grupos[g].map(x => `
       <div class="item" data-inv="${esc(x.id)}">
-        <div class="av ${x.foto?"sinfoto":""}">${x.foto?`<img data-foto="${esc(x.foto)}" alt="">`:"📦"}</div>
+        <div class="av">${x.foto?`<span>📷</span><img data-foto="${esc(x.foto)}" alt="" style="display:none">`:"📦"}</div>
         <div class="tx"><div class="t1">${esc(x.nombre)}${Number(x.cantidad)>1?` <span style="font-weight:400;color:var(--muted)">× ${esc(x.cantidad)}</span>`:""}</div>
           <div class="t2">${esc([x.descripcion, x.observaciones].filter(Boolean).join(" · ") || "Sin observaciones")}</div></div>
         <span class="pill ${x.estado==="Bueno"?"ok":x.estado==="Regular"?"pend":"bad"}">${esc(x.estado||"—")}</span>
       </div>`).join("") + `</div>`).join("")
     : `<div class="card"><div class="empty">El inventario está vacío.<br>Agrega muebles, electrodomésticos, lámparas, cortinas, llaves, etc., con su estado y una foto.</div></div>`);
-  $("bAddInv2").onclick = () => formInventario(null, i.id);
+  $("bAddInv").onclick = () => formInventario(null, i.id);
   $("detInventario").querySelectorAll("[data-inv]").forEach(el => el.onclick = () => formInventario(el.dataset.inv, i.id));
   pintarFotos($("detInventario"));
-
-  /* --- Datos y saldo --- */
-  const ing = lista("ingresos").filter(x => x.inmuebleId===i.id), egr = lista("egresos").filter(x => x.inmuebleId===i.id);
-  const pend = egr.filter(e => e.estado==="Pendiente");
-  $("detDatos").innerHTML = `
-    <div class="card"><h2>Datos del inmueble <button class="lnk" id="bEdInm">Editar</button></h2>
-      <div class="kv"><span class="k">Conjunto</span><span>${esc(i.conjunto)}</span><span class="k">Torre</span><span>${esc(i.torre)}</span><span class="k">Apartamento</span><span>${esc(i.apartamento)}</span>
-      ${i.propietario?`<span class="k">Propietario / Arrendatario</span><span>${esc(i.propietario)}</span>`:""}${i.ciudad?`<span class="k">Ciudad</span><span>${esc(i.ciudad)}</span>`:""}${i.notas?`<span class="k">Notas</span><span>${esc(i.notas)}</span>`:""}</div></div>
-    <div class="card"><h2>Saldo histórico</h2>
-      <div class="stats3"><div><div class="l">Ingresos</div><div class="v pos">${fmt(sum(ing))}</div></div><div><div class="l">Egresos</div><div class="v neg">${fmt(sum(egr))}</div></div><div><div class="l">Balance</div><div class="v ${sum(ing)-sum(egr)>=0?"pos":"neg"}">${fmt(sum(ing)-sum(egr))}</div></div></div>
-      ${pend.length?`<p class="wrn" style="margin:12px 0 0;font-size:13.5px">⚠ ${pend.length} egreso${pend.length>1?"s":""} pendiente${pend.length>1?"s":""} por ${fmt(sum(pend))}</p>`:""}
-      <div class="btns"><button class="btn sec" id="bVerIng">Ver ingresos</button><button class="btn sec" id="bVerEgr">Ver egresos</button></div></div>`;
-  $("bEdInm").onclick = () => formInmueble(i.id);
-  $("bVerIng").onclick = () => { $("fgInm").value = i.id; $("fgMes").value = ""; irA("ingresos"); renderIngresos(); };
-  $("bVerEgr").onclick = () => { $("feInm").value = i.id; $("feMes").value = ""; irA("egresos"); renderEgresos(); };
 }
 
 function formAdmin(id){
@@ -559,47 +686,34 @@ function formInventario(id, inmuebleId){
 }
 
 /* =====================================================================
-   INGRESOS
+   FORMULARIOS DE INGRESOS Y EGRESOS (siempre de un inmueble)
    ===================================================================== */
-function sinInmuebles(){ toast("Primero registra un inmueble"); irA("inmuebles"); }
-function formIngreso(id){
-  if(!lista("inmuebles").length) return sinInmuebles();
-  const g = getR("ingresos", id) || { fecha:hoy(), concepto:"Arriendo", medio:"Transferencia", inmuebleId:$("fgInm").value || "" };
-  abrirHoja(`<h3>${id?"Editar":"Nuevo"} ingreso</h3>
-    <label>Inmueble *</label><select id="fInm">${opcInm(g.inmuebleId)}</select>
-    <label>Concepto *</label><select id="fCon">${CON_ING.map(c => `<option ${c===g.concepto?"selected":""}>${c}</option>`).join("")}</select>
+function formIngreso(id, inmuebleId){
+  const g = getR("ingresos", id) || { fecha:hoy(), concepto:"Arriendo", medio:"Transferencia", inmuebleId };
+  const cuota = null;
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} ingreso</h3><div class="t2" style="white-space:normal">${esc(etq(g.inmuebleId))}</div>
+    <label>Concepto *</label><div class="chips" id="fChips">${CON_ING.map(c => `<button type="button" class="chip ${c===g.concepto?"on":""}" data-c="${c}">${ICON_ING[c]} ${c}</button>`).join("")}</div>
     <label>Valor (COP) *</label><input id="fVal" type="number" inputmode="numeric" min="0" value="${esc(g.valor)}" placeholder="0">
     <div class="row2"><div><label>Fecha *</label><input id="fFec" type="date" value="${esc(g.fecha)}"></div>
     <div><label>Medio de pago</label><select id="fMed">${["Transferencia","Efectivo","Consignación","Otro"].map(c => `<option ${c===g.medio?"selected":""}>${c}</option>`).join("")}</select></div></div>
     <label>Notas</label><input id="fNot" value="${esc(g.notas)}">
     <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
+  let concepto = g.concepto;
+  $("fChips").querySelectorAll(".chip").forEach(c => c.onclick = () => { concepto = c.dataset.c; $("fChips").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c)); });
   if($("bCan")) $("bCan").onclick = cerrarHoja;
   $("bOk").onclick = () => {
-    const v = { inmuebleId:$("fInm").value, concepto:$("fCon").value, valor:Number($("fVal").value), fecha:$("fFec").value, medio:$("fMed").value, notas:$("fNot").value.trim() };
-    if(!v.inmuebleId || !v.fecha || !(v.valor > 0)) return toast("Completa inmueble, fecha y valor");
+    const v = { inmuebleId:g.inmuebleId, concepto, valor:Number($("fVal").value), fecha:$("fFec").value, medio:$("fMed").value, notas:$("fNot").value.trim() };
+    if(!v.fecha || !(v.valor > 0)) return toast("Completa la fecha y el valor");
     poner("ingresos", { ...g, ...v, id: id || uid() }); cerrarHoja(); toast("Ingreso guardado ✔");
   };
   if(id) $("bDel").onclick = async () => { if(await confirmar("Se eliminará este ingreso.")){ quitar("ingresos", id); toast("Ingreso eliminado"); } };
 }
-function renderIngresos(){
-  const m = $("fgMes").value, i = $("fgInm").value;
-  const rows = lista("ingresos").filter(x => (!m || String(x.fecha).startsWith(m)) && (!i || x.inmuebleId === i)).sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
-  if(!rows.length){ $("listIng").innerHTML = `<div class="empty">${lista("ingresos").length ? "No hay ingresos con estos filtros." : "Aún no hay ingresos. Toca <b>+</b> para registrar uno."}</div>`; return; }
-  $("listIng").innerHTML = rows.map(g => `<div class="item" data-id="${esc(g.id)}"><div class="av" style="background:var(--okbg)">${ICON_ING[g.concepto]||"💵"}</div>
-    <div class="tx"><div class="t1">${esc(g.concepto)}</div><div class="t2">${esc(etq(g.inmuebleId))}</div><div class="t2">${fechaCorta(g.fecha)}${g.notas?" · "+esc(g.notas):""}</div></div>
-    <div class="amt pos">${fmt(g.valor)}</div></div>`).join("") + `<div class="total"><span>Total</span><span class="pos">${fmt(sum(rows))}</span></div>`;
-  $("listIng").querySelectorAll("[data-id]").forEach(el => el.onclick = () => formIngreso(el.dataset.id));
-}
 
-/* =====================================================================
-   EGRESOS
-   ===================================================================== */
 function formEgreso(id, pre){
-  if(!lista("inmuebles").length) return sinInmuebles();
-  const e = getR("egresos", id) || { fecha:hoy(), periodo:hoy().slice(0,7), concepto:"Administración", estado:"Pagado", inmuebleId:$("feInm").value || "", ...(pre||{}) };
+  const e = getR("egresos", id) || { fecha:hoy(), periodo:hoy().slice(0,7), concepto:"Administración", estado:"Pagado", ...(pre||{}) };
   let concepto = e.concepto;
-  abrirHoja(`<h3>${id?"Editar":"Nuevo"} egreso</h3>
-    <label>Inmueble *</label><select id="fInm">${opcInm(e.inmuebleId)}</select>
+  if(!id && concepto === "Administración" && !e.valor){ const a = getR("inmuebles", e.inmuebleId)?.admin; if(a?.cuota) e.valor = a.cuota; }
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} egreso</h3><div class="t2" style="white-space:normal">${esc(etq(e.inmuebleId))}</div>
     <label>Concepto *</label><div class="chips" id="fChips">${CON_EGR.map(c => `<button type="button" class="chip ${c===concepto?"on":""}" data-c="${c}">${ICON_EGR[c]} ${c}</button>`).join("")}</div>
     <label>Valor (COP) *</label><input id="fVal" type="number" inputmode="numeric" min="0" value="${esc(e.valor)}" placeholder="0">
     <div class="row2"><div><label>Periodo facturado</label><input id="fPer" type="month" value="${esc(e.periodo)}"></div>
@@ -610,28 +724,16 @@ function formEgreso(id, pre){
     <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
   $("fChips").querySelectorAll(".chip").forEach(c => c.onclick = () => {
     concepto = c.dataset.c; $("fChips").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
-    if(concepto === "Administración" && !$("fVal").value){ const a = getR("inmuebles", $("fInm").value)?.admin; if(a?.cuota) $("fVal").value = a.cuota; }
+    if(concepto === "Administración" && !$("fVal").value){ const a = getR("inmuebles", e.inmuebleId)?.admin; if(a?.cuota) $("fVal").value = a.cuota; }
   });
   if($("bCan")) $("bCan").onclick = cerrarHoja;
-  const leer = () => ({ inmuebleId:$("fInm").value, concepto, valor:Number($("fVal").value), periodo:$("fPer").value, estado:$("fEst").value, fecha:$("fFec").value, notas:$("fNot").value.trim() });
+  const leer = () => ({ inmuebleId:e.inmuebleId, concepto, valor:Number($("fVal").value), periodo:$("fPer").value, estado:$("fEst").value, fecha:$("fFec").value, notas:$("fNot").value.trim() });
   $("bOk").onclick = () => {
-    const v = leer(); if(!v.inmuebleId || !v.fecha || !(v.valor > 0)) return toast("Completa inmueble, fecha y valor");
+    const v = leer(); if(!v.fecha || !(v.valor > 0)) return toast("Completa la fecha y el valor");
     poner("egresos", { ...(getR("egresos", id)||{}), ...v, id: id || uid() }); cerrarHoja(); toast("Egreso guardado ✔");
   };
   if($("bPag")) $("bPag").onclick = () => { const v = leer(); if(!(v.valor > 0)) return toast("Indica el valor"); poner("egresos", { ...e, ...v, estado:"Pagado", fecha:hoy(), id }); cerrarHoja(); toast("Marcado como pagado ✔"); };
   if(id) $("bDel").onclick = async () => { if(await confirmar("Se eliminará este egreso.")){ quitar("egresos", id); toast("Egreso eliminado"); } };
-}
-function renderEgresos(){
-  const m = $("feMes").value, i = $("feInm").value, c = $("feCon").value, st = $("feEst").value;
-  const rows = lista("egresos").filter(x => (!m || String(x.fecha).startsWith(m) || x.periodo === m) && (!i || x.inmuebleId === i) && (!c || x.concepto === c) && (!st || x.estado === st))
-    .sort((a,b) => (a.estado===b.estado ? 0 : a.estado==="Pendiente" ? -1 : 1) || String(b.fecha).localeCompare(String(a.fecha)));
-  if(!rows.length){ $("listEgr").innerHTML = `<div class="empty">${lista("egresos").length ? "No hay egresos con estos filtros." : "Aún no hay egresos. Toca <b>+</b> para registrar administración, agua, energía, gas o internet."}</div>`; return; }
-  $("listEgr").innerHTML = rows.map(e => `<div class="item" data-id="${esc(e.id)}"><div class="av" style="background:var(--badbg)">${ICON_EGR[e.concepto]||"📌"}</div>
-    <div class="tx"><div class="t1">${esc(e.concepto)}${e.periodo?` <span style="font-weight:400;color:var(--muted)">· ${periodoTxt(e.periodo)}</span>`:""}</div>
-    <div class="t2">${esc(etq(e.inmuebleId))}</div><div class="t2">${fechaCorta(e.fecha)}${e.notas?" · "+esc(e.notas):""}</div></div>
-    <div><div class="amt neg">${fmt(e.valor)}</div><div style="text-align:right"><span class="pill ${e.estado==="Pagado"?"ok":"pend"}">${esc(e.estado)}</span></div></div></div>`).join("")
-    + `<div class="total"><span>Total</span><span class="neg">${fmt(sum(rows))}</span></div>`;
-  $("listEgr").querySelectorAll("[data-id]").forEach(el => el.onclick = () => formEgreso(el.dataset.id));
 }
 
 /* =====================================================================
@@ -654,7 +756,7 @@ function renderResumen(){
   $("resInm").innerHTML = !inms.length ? `<div class="empty">Registra tus inmuebles en la pestaña <b>Inmuebles</b>.</div>` :
     inms.map(i => { const a = sum(ing.filter(x => x.inmuebleId===i.id)), b = sum(egr.filter(x => x.inmuebleId===i.id));
       return `<div class="item" data-inm="${esc(i.id)}"><div class="tx"><div class="t1">${esc(etq(i.id))}</div><div class="t2"><span class="pos">+${fmt(a)}</span> · <span class="neg">−${fmt(b)}</span></div></div><div class="amt ${a-b>=0?"pos":"neg"}">${fmt(a-b)}</div></div>`; }).join("");
-  $("resInm").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "datos"));
+  $("resInm").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "ingresos"));
   const cons = [...new Set(CON_EGR.concat(egr.map(e => e.concepto)))].map(c => [c, sum(egr.filter(e => e.concepto===c))]).filter(x => x[1] > 0).sort((a,b) => b[1]-a[1]);
   $("resCon").innerHTML = !cons.length ? `<div class="empty">Sin egresos en este periodo.</div>` :
     cons.map(([c,v]) => `<div class="conrow"><div class="h"><span>${ICON_EGR[c]||"📌"} ${esc(c)}</span><b>${fmt(v)} <span style="font-weight:400;color:var(--muted);font-size:12px">${(v/tE*100).toFixed(0)}%</span></b></div><div class="bar"><i style="width:${(v/cons[0][1]*100).toFixed(1)}%"></i></div></div>`).join("");
@@ -665,14 +767,21 @@ function renderResumen(){
    ===================================================================== */
 function renderAviso(){
   const n = $("notice");
-  const hayDatos = lista("inmuebles").length + lista("ingresos").length + lista("egresos").length > 0;
-  const dias = meta.lastBackup ? Math.floor((Date.now() - new Date(meta.lastBackup)) / 86400000) : null;
-  if(hayDatos && (dias === null || dias >= 30)){
-    n.innerHTML = `<div class="notice"><b>${dias === null ? "Aún no has descargado un respaldo." : `Tu último respaldo fue hace ${dias} días.`}</b>
-      Tus datos se guardan solo en este celular. Descarga el Excel de vez en cuando y guárdalo (correo, Drive, OneDrive) por si cambias de celular o borras el navegador.
-      <div class="btns"><button class="btn" id="bRespaldo">Descargar Excel ahora</button></div></div>`;
-    $("bRespaldo").onclick = descargarExcel;
-  } else n.innerHTML = "";
+  if(!cfg){
+    if(meta.avisoCerrado){ n.innerHTML = ""; return; }
+    n.innerHTML = `<div class="notice info"><b>Conecta la base de datos compartida.</b> Así tú y la otra persona ven y registran la misma información, guardada en una hoja de Google Sheets.
+      <div class="btns"><button class="btn sec" id="bAvNo">Ahora no</button><button class="btn" id="bAvSi">Conectar</button></div></div>`;
+    $("bAvSi").onclick = formConexion;
+    $("bAvNo").onclick = () => { meta.avisoCerrado = true; guardarLocal(); renderAviso(); };
+    return;
+  }
+  if(estadoSync === "error" && ultimoError){
+    n.innerHTML = `<div class="notice err"><b>No se pudo sincronizar.</b> ${esc(ultimoError)} Tus cambios quedan guardados en el celular y se suben cuando se arregle.
+      <div class="btns"><button class="btn sec" id="bErrCfg">Revisar conexión</button><button class="btn" id="bErrRe">Reintentar</button></div></div>`;
+    $("bErrCfg").onclick = formConexion; $("bErrRe").onclick = sincronizar;
+    return;
+  }
+  n.innerHTML = "";
 }
 
 /* =====================================================================
@@ -743,7 +852,7 @@ function renderAnalisis(){
         <div class="t2">Margen ${di.tI?(u/di.tI*100).toFixed(0)+"%":"—"} · Arriendo recibido ${mesesArr} de ${mesesCorridos} meses</div></div>
         <div class="amt ${u>=0?"pos":"neg"}">${fmt(u)}</div></div>`;
     }).join("");
-  $("aInmTabla").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "datos"));
+  $("aInmTabla").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "ingresos"));
 }
 
 function dibujarMensual(meses){
@@ -788,11 +897,17 @@ window.addEventListener("resize", () => { if(tab === "analisis") renderAnalisis(
 $("btnXls").onclick = descargarExcel;
 $("btnMenu").onclick = () => {
   abrirHoja(`<h3>Opciones</h3>
-    <div class="t2" style="white-space:normal;margin-bottom:6px">Los datos se guardan en este celular.${meta.lastBackup ? ` Último Excel descargado: ${new Date(meta.lastBackup).toLocaleDateString("es-CO")}.` : ""}</div>
-    <div class="menu-item" id="mXls"><span style="font-size:22px">📤</span><div>Descargar base de datos en Excel<small>Inmuebles, administración, ingresos, egresos, inventario y análisis mensual. Sirve de respaldo.</small></div></div>
-    <div class="menu-item" id="mImp"><span style="font-size:22px">📥</span><div>Importar desde Excel<small>Recupera un respaldo o pasa los datos a otro celular.</small></div></div>
+    <div class="t2" style="white-space:normal;margin-bottom:6px">${cfg ? `Conectada a la base compartida de Google Sheets.${meta.ultimaSync ? ` Última sincronización: ${new Date(meta.ultimaSync).toLocaleString("es-CO")}.` : ""}` : "Los datos están solo en este celular."}</div>
+    ${cfg ? `<div class="menu-item" id="mSync"><span style="font-size:22px">🔄</span><div>Sincronizar ahora</div></div>
+    <div class="menu-item" id="mShare"><span style="font-size:22px">👥</span><div>Compartir con otra persona<small>Envía un enlace que conecta su app a la misma base.</small></div></div>` : ""}
+    <div class="menu-item" id="mCfg"><span style="font-size:22px">🔗</span><div>${cfg ? "Configuración de la base compartida" : "Conectar base de datos compartida"}<small>Google Sheets: URL y clave.</small></div></div>
+    <div class="menu-item" id="mXls"><span style="font-size:22px">📤</span><div>Descargar base de datos en Excel<small>Incluye la hoja de análisis mensual.</small></div></div>
+    <div class="menu-item" id="mImp"><span style="font-size:22px">📥</span><div>Importar desde Excel<small>Recupera un respaldo o carga datos de otra versión.</small></div></div>
     <div class="btns"><button class="btn sec" id="mCer">Cerrar</button></div>`);
   $("mCer").onclick = cerrarHoja;
+  if($("mSync")) $("mSync").onclick = () => { cerrarHoja(); sincronizar().then(() => { if(estadoSync === "ok") toast("Base compartida al día ✔"); }); };
+  if($("mShare")) $("mShare").onclick = () => { cerrarHoja(); compartirConexion(); };
+  $("mCfg").onclick = () => { cerrarHoja(); formConexion(); };
   $("mXls").onclick = () => { cerrarHoja(); descargarExcel(); };
   $("mImp").onclick = () => { cerrarHoja(); $("fileImport").value = ""; $("fileImport").click(); };
 };
@@ -849,8 +964,8 @@ $("fileImport").onchange = async ev => {
     const inv = h("Inventario").filter(r => r.Elemento).map(r => ({ id:okId(r.ID), inmuebleId:s(r.ID_Inmueble), espacio:s(r.Espacio)||"General", nombre:s(r.Elemento), cantidad:num(r.Cantidad)||1, estado:s(r.Estado)||"Bueno", descripcion:s(r.Descripcion), observaciones:s(r.Observaciones), foto:(getR("inventario", s(r.ID))||{}).foto||"" }));
     if(!(await confirmar(`Se cargarán ${inm.length} inmuebles, ${ing.length} ingresos, ${egr.length} egresos y ${inv.length} elementos de inventario. Los registros con el mismo ID se reemplazan.`, "Importar"))) return;
     const t = Date.now();
-    for(const [c, arr] of [["inmuebles",inm],["ingresos",ing],["egresos",egr],["inventario",inv]]) for(const r of arr){ r.upd = t; D[c][r.id] = r; }
-    await guardarLocal(); renderTodo(); toast("Importación lista ✔");
+    for(const [c, arr] of [["inmuebles",inm],["ingresos",ing],["egresos",egr],["inventario",inv]]) for(const r of arr){ r.upd = t; D[c][r.id] = r; marcarSucio(c, r.id); }
+    await guardarLocal(); renderTodo(); programarSync(200); toast("Importación lista ✔");
   }catch(e){ console.error(e); toast("El archivo no tiene el formato esperado"); }
 };
 
@@ -858,21 +973,27 @@ $("fileImport").onchange = async ev => {
    RENDER GENERAL E INICIO
    ===================================================================== */
 function renderTodo(){
-  for(const id of ["fgInm","feInm","rInm","aInm"]){ const s = $(id), v = s.value; s.innerHTML = opcInm(v, true); if([...s.options].some(o => o.value === v)) s.value = v; }
-  const fc = $("feCon"), vc = fc.value; fc.innerHTML = `<option value="">Todos los conceptos</option>` + CON_EGR.map(c => `<option>${c}</option>`).join(""); fc.value = vc;
-  renderResumen(); renderInmuebles(); renderIngresos(); renderEgresos(); renderAnalisis();
+  for(const id of ["rInm","aInm"]){ const s = $(id), v = s.value; s.innerHTML = opcInm(v, true); if([...s.options].some(o => o.value === v)) s.value = v; }
+  renderResumen(); renderInmuebles(); renderAnalisis();
   if(inmActual) renderDetalle();
   renderAviso(); pintarEstado();
 }
 ["rAnio","rMes","rInm"].forEach(id => $(id).onchange = renderResumen);
-["fgMes","fgInm"].forEach(id => $(id).onchange = renderIngresos);
-["feMes","feInm","feCon","feEst"].forEach(id => $(id).onchange = renderEgresos);
+
+window.addEventListener("online", () => { pintarEstado(); programarSync(300); });
+window.addEventListener("offline", pintarEstado);
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible") programarSync(300); });
+setInterval(() => { if(document.visibilityState === "visible" && !$("overlay").classList.contains("show")) programarSync(0); }, 45000);
 
 (async () => {
   const d = await IDB.get("datos"), m = await IDB.get("meta");
   if(d) D = fusionar(d, {});
-  if(m) meta = { ...meta, ...m };
+  if(m) meta = { ...meta, ...m, sucios: m.sucios || {} };
+  if(!cfg && meta.cfg) guardarCfg(meta.cfg);
+  const recienConectada = leerEnlaceConexion();
   renderTodo();
+  if(recienConectada) toast("Conectada a la base compartida ✔");
+  if(cfg) sincronizar();
   try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
   if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();

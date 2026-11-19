@@ -1,7 +1,7 @@
 {
   "name": "Mis Inmuebles",
   "short_name": "Inmuebles",
-  "description": "Administración de inmuebles: ingresos, egresos, administración e inventario, guardado en OneDrive.",
+  "description": "Administración de inmuebles: ingresos, egresos, administración e inventario, guardado en el celular con respaldo en Excel.",
   "lang": "es-CO",
   "start_url": "./",
   "scope": "./",

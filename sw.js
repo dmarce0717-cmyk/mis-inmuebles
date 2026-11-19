@@ -1,9 +1,9 @@
 // Service worker: guarda la aplicación en el celular para que abra rápido y funcione sin internet.
 // Los datos NO pasan por aquí: se sincronizan con OneDrive desde la aplicación.
-const CACHE = "mis-inmuebles-v1";
+const CACHE = "mis-inmuebles-v2";
 const ARCHIVOS = [
-  "./", "./index.html", "./config.js", "./manifest.webmanifest",
-  "./lib/msal-browser.min.js", "./lib/xlsx.full.min.js",
+  "./", "./index.html", "./manifest.webmanifest",
+  "./lib/xlsx.full.min.js",
   "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"
 ];
 

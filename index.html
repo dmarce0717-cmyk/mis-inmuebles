@@ -12,8 +12,6 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Mis Inmuebles</title>
-<script src="config.js"></script>
-<script src="lib/msal-browser.min.js"></script>
 <script src="lib/xlsx.full.min.js" defer></script>
 <style>
   :root{
@@ -112,13 +110,30 @@
   .visor{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:40;display:none;align-items:center;justify-content:center}
   .visor.show{display:flex}
   .visor img{max-width:100%;max-height:100%}
+
+  /* análisis */
+  :root{ --s1:#2a78d6; --s2:#eb6834; --grid:#e8ecef; }
+  .chart{position:relative}
+  .chart .ax{font-size:10.5px;fill:var(--muted)}
+  .legend{display:flex;gap:14px;font-size:12.5px;color:var(--muted);margin:-2px 0 8px}
+  .legend i, .tip i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .tip{position:absolute;top:0;background:#fff;border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12);border-radius:10px;padding:8px 10px;font-size:12.5px;min-width:160px;pointer-events:none}
+  .tip div{display:flex;align-items:center;margin-top:3px} .tip span{margin-left:auto;padding-left:12px;font-weight:650;font-variant-numeric:tabular-nums}
+  .tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+  .tbl th,.tbl td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  .tbl th{color:var(--muted);font-weight:600;font-size:11.5px}
+  .tbl .num{text-align:right} .tbl tfoot td{font-weight:700;border-top:2px solid var(--line);border-bottom:none}
+  .scrollx{overflow-x:auto}
+  .kpis.six{grid-template-columns:1fr 1fr}
+  .nota{font-size:12.5px;color:var(--muted);margin:-4px 2px 12px}
+  #aCon .t2, #aInmTabla .t2{white-space:normal}
 </style>
 </head>
 <body>
 
 <header>
   <div class="ttl"><h1 id="hdrTitle">🏢 Mis Inmuebles</h1><div class="sub"><span class="dot" id="syncDot"></span><span id="hdrSub">Cargando…</span></div></div>
-  <button class="iconbtn" id="btnSync" aria-label="Sincronizar">⟳</button>
+  <button class="iconbtn" id="btnXls" aria-label="Descargar Excel" title="Descargar Excel">⤓</button>
   <button class="iconbtn" id="btnMenu" aria-label="Menú">⋯</button>
 </header>
 
@@ -168,6 +183,20 @@
       <select id="feEst"><option value="">Todos los estados</option><option>Pagado</option><option>Pendiente</option></select></div>
     <div class="card"><div id="listEgr"></div></div>
   </section>
+  <!-- ANÁLISIS ECONÓMICO -->
+  <section class="tab" id="tab-analisis">
+    <div class="filters"><select id="aAnio" aria-label="Año"></select><select id="aInm" aria-label="Inmueble"></select></div>
+    <div class="kpis six" id="aKpis"></div>
+    <div class="nota" id="aNotaAnt"></div>
+    <div class="card"><h2>Ingresos y egresos por mes</h2>
+      <div class="legend"><span><i style="background:var(--s1)"></i>Ingresos</span><span><i style="background:var(--s2)"></i>Egresos</span></div>
+      <div class="chart" id="aChart"></div>
+      <div class="t2" style="white-space:normal;margin-top:4px">Toca un mes para ver el detalle.</div>
+    </div>
+    <div class="card"><h2>Flujo mensual</h2><div class="scrollx" id="aTabla"></div></div>
+    <div class="card"><h2>¿En qué se va la plata?</h2><div id="aCon"></div></div>
+    <div class="card"><h2>Rentabilidad por inmueble</h2><div id="aInmTabla"></div></div>
+  </section>
 </main>
 
 <button class="fab hide" id="fab" aria-label="Agregar">+</button>
@@ -177,6 +206,7 @@
   <button data-tab="inmuebles"><span class="ic">🏠</span>Inmuebles</button>
   <button data-tab="ingresos"><span class="ic">⬇️</span>Ingresos</button>
   <button data-tab="egresos"><span class="ic">⬆️</span>Egresos</button>
+  <button data-tab="analisis"><span class="ic">📈</span>Análisis</button>
 </nav>
 
 <div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
@@ -235,7 +265,7 @@ const IDB = (() => {
    ===================================================================== */
 const COLS = ["inmuebles","ingresos","egresos","inventario"];
 let D = { v:1, inmuebles:{}, ingresos:{}, egresos:{}, inventario:{} };
-let meta = { etag:null, dirty:false, lastSync:null, pendFotos:[] };
+let meta = { lastBackup:null };
 
 const lista = col => Object.values(D[col]||{}).filter(r => r && !r.del);
 const getR = (col,id) => { const r=D[col]?.[id]; return r && !r.del ? r : null; };
@@ -263,112 +293,18 @@ function fusionar(a, b){
 }
 
 /* =====================================================================
-   MICROSOFT / ONEDRIVE
-   La app guarda en OneDrive › Aplicaciones › (nombre de tu registro) › datos.json y /fotos
+   ESTADO (los datos viven en este celular; el respaldo es el Excel)
    ===================================================================== */
-const CLIENT_ID = (window.APP_CONFIG && window.APP_CONFIG.clientId) || (()=>{ try{return localStorage.getItem("mi_clientId")||"";}catch(e){return "";} })();
-const REDIRECT = location.origin + location.pathname.replace(/index\.html$/, "");
-const SCOPES = ["Files.ReadWrite.AppFolder", "User.Read"];
-const GRAPH = "https://graph.microsoft.com/v1.0";
-const AROOT = "/me/drive/special/approot";
-let msalApp = null, cuenta = null, authError = null;
-
-async function iniciarAuth(){
-  if(!CLIENT_ID || typeof msal === "undefined") return;
-  try{
-    msalApp = new msal.PublicClientApplication({
-      auth: { clientId: CLIENT_ID, authority: "https://login.microsoftonline.com/common", redirectUri: REDIRECT },
-      cache: { cacheLocation: "localStorage" }
-    });
-    await msalApp.initialize();
-    const r = await msalApp.handleRedirectPromise();
-    if(r && r.account) msalApp.setActiveAccount(r.account);
-    cuenta = msalApp.getActiveAccount() || msalApp.getAllAccounts()[0] || null;
-    if(cuenta) msalApp.setActiveAccount(cuenta);
-  }catch(e){ console.error(e); authError = e; }
-}
-async function iniciarSesion(){
-  if(!msalApp){ toast("Primero configura el ID de la aplicación"); return; }
-  try{ await msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" }); }
-  catch(e){ toast("No se pudo iniciar sesión: " + (e.errorCode||e.message)); }
-}
-async function cerrarSesion(){
-  if(!msalApp || !cuenta) return;
-  try{ await msalApp.logoutRedirect({ account: cuenta, postLogoutRedirectUri: REDIRECT }); }catch(e){ toast("No se pudo cerrar sesión"); }
-}
-async function token(){
-  try{ return (await msalApp.acquireTokenSilent({ scopes: SCOPES, account: cuenta })).accessToken; }
-  catch(e){
-    if(e instanceof msal.InteractionRequiredAuthError){ await msalApp.acquireTokenRedirect({ scopes: SCOPES }); }
-    throw e;
-  }
-}
-async function graph(path, opts = {}){
-  const t = await token();
-  return fetch(GRAPH + path, { ...opts, headers: { Authorization: "Bearer " + t, ...(opts.headers||{}) } });
-}
-
-/* ---------- sincronización ---------- */
-let syncing = false, otraVez = false, syncTimer = null, estadoSync = "local";
-function programarSync(ms = 1200){ clearTimeout(syncTimer); syncTimer = setTimeout(sincronizar, ms); }
+function programarSync(){ /* sin nube: todo queda guardado en el celular */ }
 function pintarEstado(){
-  const dot = $("syncDot"), sub = $("hdrSub");
   const n = lista("inmuebles").length;
-  const base = `${n} inmueble${n===1?"":"s"}`;
-  if(!cuenta){ dot.className="dot"; sub.textContent = base + " · sin conectar a OneDrive"; return; }
-  if(estadoSync==="sync"){ dot.className="dot sync"; sub.textContent = base + " · sincronizando…"; return; }
-  if(estadoSync==="error"){ dot.className="dot"; sub.textContent = base + " · error al sincronizar"; return; }
-  if(!navigator.onLine){ dot.className="dot sync"; sub.textContent = base + " · sin internet (se guarda en el celular)"; return; }
-  dot.className = meta.dirty ? "dot sync" : "dot ok";
-  sub.textContent = base + (meta.dirty ? " · cambios por subir" : " · OneDrive al día");
+  const dias = meta.lastBackup ? Math.floor((Date.now() - new Date(meta.lastBackup)) / 86400000) : null;
+  const ok = dias !== null && dias < 30;
+  $("syncDot").className = "dot " + (ok ? "ok" : "sync");
+  $("hdrSub").textContent = `${n} inmueble${n===1?"":"s"} · ` + (dias === null ? "sin respaldo en Excel" : dias === 0 ? "respaldo de hoy" : `último respaldo hace ${dias} día${dias===1?"":"s"}`);
 }
 
-async function sincronizar(){
-  if(!cuenta || !navigator.onLine){ pintarEstado(); return; }
-  if(syncing){ otraVez = true; return; }
-  syncing = true; estadoSync = "sync"; pintarEstado();
-  try{
-    await subirFotosPendientes();
-    for(let intento = 0; intento < 4; intento++){
-      // 1. Leer la versión que está en OneDrive
-      let remoto = null, etagRemoto = null;
-      const m = await graph(AROOT + ":/datos.json");
-      if(m.status === 200){
-        const info = await m.json(); etagRemoto = info.eTag;
-        if(etagRemoto !== meta.etag || !meta.dirty){
-          const url = info["@microsoft.graph.downloadUrl"];
-          const c = url ? await fetch(url, { cache: "no-store" }) : await graph(AROOT + ":/datos.json:/content");
-          remoto = await c.json();
-        }
-      } else if(m.status !== 404) throw new Error("Lectura OneDrive " + m.status);
-
-      // 2. Mezclar con lo del celular
-      const mezcla = remoto ? fusionar(remoto, D) : D;
-      D = mezcla;
-      const igualQueRemoto = remoto && JSON.stringify(fusionar(remoto, {})) === JSON.stringify(mezcla);
-      if(igualQueRemoto && !(!remoto)){ meta.etag = etagRemoto; meta.dirty = false; break; }
-
-      // 3. Subir el resultado (si alguien cambió el archivo mientras tanto, se repite)
-      const h = { "Content-Type": "application/json" };
-      if(etagRemoto) h["If-Match"] = etagRemoto; else h["If-None-Match"] = "*";
-      const p = await graph(AROOT + ":/datos.json:/content", { method: "PUT", headers: h, body: JSON.stringify(D) });
-      if(p.status === 412 || p.status === 409) continue;
-      if(!p.ok) throw new Error("Escritura OneDrive " + p.status);
-      const info2 = await p.json(); meta.etag = info2.eTag; meta.dirty = false; break;
-    }
-    meta.lastSync = new Date().toISOString();
-    await guardarLocal();
-    estadoSync = "ok";
-  }catch(e){
-    console.error(e); estadoSync = "error";
-    if(!(e && e.errorCode)) toast("No se pudo sincronizar con OneDrive. Se reintentará.");
-  }finally{
-    syncing = false; renderTodo();
-    if(otraVez){ otraVez = false; programarSync(300); }
-  }
-}
-
-/* ---------- fotos ---------- */
+/* ---------- fotos (guardadas en el celular) ---------- */
 const fotoURL = new Map();
 async function comprimir(file){
   let bmp;
@@ -377,51 +313,18 @@ async function comprimir(file){
   const max = 1280, w = bmp.width, h = bmp.height, k = Math.min(1, max / Math.max(w, h));
   const cv = document.createElement("canvas"); cv.width = Math.round(w*k); cv.height = Math.round(h*k);
   cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
-  return new Promise(res => cv.toBlob(b => res(b), "image/jpeg", 0.78));
+  return new Promise(res => cv.toBlob(b => res(b), "image/jpeg", 0.75));
 }
-async function guardarFoto(nombre, blob){
-  await IDB.set("foto:" + nombre, blob);
-  fotoURL.set(nombre, URL.createObjectURL(blob));
-  meta.pendFotos = meta.pendFotos.filter(p => p.n !== nombre).concat([{ op:"up", n:nombre }]);
-  await guardarLocal();
-}
-async function borrarFoto(nombre){
-  if(!nombre) return;
-  await IDB.del("foto:" + nombre); fotoURL.delete(nombre);
-  meta.pendFotos = meta.pendFotos.filter(p => p.n !== nombre).concat([{ op:"del", n:nombre }]);
-  await guardarLocal();
-}
-async function subirFotosPendientes(){
-  for(const p of [...meta.pendFotos]){
-    let ok = false;
-    if(p.op === "up"){
-      const b = await IDB.get("foto:" + p.n);
-      if(!b){ ok = true; }
-      else { const r = await graph(`${AROOT}:/fotos/${encodeURIComponent(p.n)}:/content`, { method:"PUT", headers:{ "Content-Type":"image/jpeg" }, body:b }); ok = r.ok; }
-    } else {
-      const r = await graph(`${AROOT}:/fotos/${encodeURIComponent(p.n)}`, { method:"DELETE" }); ok = r.ok || r.status === 404;
-    }
-    if(ok){ meta.pendFotos = meta.pendFotos.filter(x => !(x.n === p.n && x.op === p.op)); await guardarLocal(); }
-  }
-}
+async function guardarFoto(nombre, blob){ await IDB.set("foto:" + nombre, blob); fotoURL.set(nombre, URL.createObjectURL(blob)); }
+async function borrarFoto(nombre){ if(!nombre) return; await IDB.del("foto:" + nombre); fotoURL.delete(nombre); }
 async function urlFoto(nombre){
   if(!nombre) return null;
   if(fotoURL.has(nombre)) return fotoURL.get(nombre);
-  let b = await IDB.get("foto:" + nombre);
-  if(!b && cuenta && navigator.onLine){
-    try{
-      const m = await graph(`${AROOT}:/fotos/${encodeURIComponent(nombre)}`);
-      if(m.ok){ const info = await m.json(); const r = await fetch(info["@microsoft.graph.downloadUrl"]); if(r.ok){ b = await r.blob(); await IDB.set("foto:" + nombre, b); } }
-    }catch(e){ console.warn(e); }
-  }
-  if(!b) return null;
+  const b = await IDB.get("foto:" + nombre); if(!b) return null;
   const u = URL.createObjectURL(b); fotoURL.set(nombre, u); return u;
 }
 async function pintarFotos(root){
-  for(const img of root.querySelectorAll("img[data-foto]")){
-    const u = await urlFoto(img.dataset.foto);
-    if(u){ img.src = u; img.parentElement.classList.remove("sinfoto"); }
-  }
+  for(const img of root.querySelectorAll("img[data-foto]")){ const u = await urlFoto(img.dataset.foto); if(u) img.src = u; }
 }
 $("visor").onclick = () => $("visor").classList.remove("show");
 function verFoto(nombre){ urlFoto(nombre).then(u => { if(u){ $("visorImg").src = u; $("visor").classList.add("show"); } }); }
@@ -434,7 +337,8 @@ function irA(t){
   tab = t;
   document.querySelectorAll("nav.bottom button").forEach(x => x.classList.toggle("active", x.dataset.tab === (t==="detalle"?"inmuebles":t)));
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.id === "tab-" + t));
-  $("fab").classList.toggle("hide", t === "resumen" || t === "detalle");
+  $("fab").classList.toggle("hide", t === "resumen" || t === "detalle" || t === "analisis");
+  if(t === "analisis") setTimeout(renderAnalisis, 0);
   $("hdrTitle").textContent = t === "detalle" && getR("inmuebles", inmActual) ? "🏠 " + etqCorta(inmActual) : "🏢 Mis Inmuebles";
   window.scrollTo(0, 0);
 }
@@ -757,97 +661,177 @@ function renderResumen(){
 }
 
 /* =====================================================================
-   AVISOS (configuración y conexión)
+   AVISOS
    ===================================================================== */
 function renderAviso(){
   const n = $("notice");
-  if(!CLIENT_ID){
-    n.innerHTML = `<div class="notice info"><b>Conecta tu OneDrive (una sola vez).</b><br>
-      Pega el <b>Id. de aplicación (cliente)</b> que te dio Microsoft al registrar la app. En el registro, la URI de redirección debe ser exactamente:
-      <code class="uri">${esc(REDIRECT)}</code>
-      <input id="cfgId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
-      <div class="btns"><button class="btn" id="cfgOk">Guardar y conectar</button></div>
-      <div class="t2" style="white-space:normal;margin-top:8px">Mientras tanto puedes usar la app: los datos quedan en este celular y se suben cuando conectes.</div></div>`;
-    $("cfgOk").onclick = () => {
-      const v = $("cfgId").value.trim();
-      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return toast("Ese ID no tiene el formato correcto");
-      try{ localStorage.setItem("mi_clientId", v); }catch(e){}
-      location.reload();
-    };
-    return;
-  }
-  if(authError){
-    n.innerHTML = `<div class="notice err"><b>No se pudo conectar con Microsoft.</b><br>${esc(authError.errorMessage || authError.message || authError)}<br>
-      Revisa que la URI de redirección registrada sea: <code class="uri">${esc(REDIRECT)}</code>
-      <div class="btns"><button class="btn sec" id="bReint">Intentar de nuevo</button></div></div>`;
-    $("bReint").onclick = iniciarSesion; return;
-  }
-  if(!cuenta){
-    n.innerHTML = `<div class="notice info"><b>Inicia sesión con tu cuenta de Microsoft</b> para guardar todo en tu OneDrive y verlo en todos tus dispositivos.
-      <div class="btns"><button class="btn" id="bLogin">Conectar OneDrive</button></div></div>`;
-    $("bLogin").onclick = iniciarSesion; return;
-  }
-  n.innerHTML = "";
+  const hayDatos = lista("inmuebles").length + lista("ingresos").length + lista("egresos").length > 0;
+  const dias = meta.lastBackup ? Math.floor((Date.now() - new Date(meta.lastBackup)) / 86400000) : null;
+  if(hayDatos && (dias === null || dias >= 30)){
+    n.innerHTML = `<div class="notice"><b>${dias === null ? "Aún no has descargado un respaldo." : `Tu último respaldo fue hace ${dias} días.`}</b>
+      Tus datos se guardan solo en este celular. Descarga el Excel de vez en cuando y guárdalo (correo, Drive, OneDrive) por si cambias de celular o borras el navegador.
+      <div class="btns"><button class="btn" id="bRespaldo">Descargar Excel ahora</button></div></div>`;
+    $("bRespaldo").onclick = descargarExcel;
+  } else n.innerHTML = "";
 }
 
 /* =====================================================================
-   MENÚ: cuenta, Excel, importación
+   ANÁLISIS ECONÓMICO
    ===================================================================== */
-$("btnSync").onclick = () => { if(!cuenta) return toast("Primero conecta OneDrive"); sincronizar().then(() => { if(estadoSync==="ok") toast("OneDrive al día ✔"); }); };
+const MES3 = MESES.map(m => m.slice(0,3));
+function datosAnalisis(anio, inm){
+  const deInm = x => !inm || x.inmuebleId === inm;
+  const ing = lista("ingresos").filter(deInm), egr = lista("egresos").filter(deInm);
+  const delAnio = (arr, a) => arr.filter(x => String(x.fecha).slice(0,4) === a);
+  const iA = delAnio(ing, anio), eA = delAnio(egr, anio);
+  const meses = MESES.map((_, k) => {
+    const mm = `${anio}-${pad(k+1)}`;
+    const a = sum(iA.filter(x => String(x.fecha).startsWith(mm))), b = sum(eA.filter(x => String(x.fecha).startsWith(mm)));
+    return { k, ing:a, egr:b, util:a-b };
+  });
+  let acc = 0; meses.forEach(m => { acc += m.util; m.acum = acc; });
+  const ant = String(Number(anio) - 1);
+  return { iA, eA, meses, tI:sum(iA), tE:sum(eA), utilAnt: sum(delAnio(ing, ant)) - sum(delAnio(egr, ant)), hayAnt: delAnio(ing, ant).length + delAnio(egr, ant).length > 0 };
+}
+
+function renderAnalisis(){
+  const anioAct = String(new Date().getFullYear());
+  const anios = [...new Set([...lista("ingresos"), ...lista("egresos")].map(x => String(x.fecha).slice(0,4)).filter(a => /^\d{4}$/.test(a)).concat([anioAct]))].sort().reverse();
+  const sa = $("aAnio"), prev = sa.value || anioAct;
+  sa.innerHTML = anios.map(a => `<option ${a===prev?"selected":""}>${a}</option>`).join("");
+  if(!anios.includes(prev)) sa.value = anioAct;
+  const A = sa.value, I = $("aInm").value;
+  const d = datosAnalisis(A, I);
+  const util = d.tI - d.tE, margen = d.tI ? util / d.tI * 100 : null;
+  const esActual = A === anioAct, mesesCorridos = esActual ? new Date().getMonth() + 1 : 12;
+  const promUtil = util / mesesCorridos;
+
+  // KPIs
+  const varAnt = d.hayAnt && d.utilAnt !== 0 ? (util - d.utilAnt) / Math.abs(d.utilAnt) * 100 : null;
+  $("aKpis").innerHTML = `
+    <div class="kpi"><div class="l">Utilidad neta ${A}</div><div class="v ${util>=0?"pos":"neg"}">${fmt(util)}</div></div>
+    <div class="kpi"><div class="l">Margen sobre ingresos</div><div class="v">${margen===null?"—":margen.toFixed(1)+"%"}</div></div>
+    <div class="kpi"><div class="l">Utilidad promedio / mes</div><div class="v">${fmt(promUtil)}</div></div>
+    <div class="kpi"><div class="l">${esActual ? "Proyección al cierre del año" : "Frente al año anterior"}</div><div class="v">${esActual ? fmt(promUtil*12) : (varAnt===null ? "—" : (varAnt>=0?"+":"")+varAnt.toFixed(0)+"%")}</div></div>
+    <div class="kpi"><div class="l">Ingresos ${A}</div><div class="v">${fmt(d.tI)}</div></div>
+    <div class="kpi"><div class="l">Egresos ${A}</div><div class="v">${fmt(d.tE)}</div></div>`;
+  $("aNotaAnt").textContent = esActual && varAnt !== null ? `Frente a ${Number(A)-1}: ${varAnt>=0?"+":""}${varAnt.toFixed(0)}% en utilidad (${fmt(d.utilAnt)} el año anterior).` : (esActual ? `Proyección = utilidad promedio de ${mesesCorridos} mes${mesesCorridos>1?"es":""} × 12.` : "");
+
+  // Gráfica mensual (barras agrupadas: ingresos vs egresos)
+  dibujarMensual(d.meses);
+
+  // Tabla mensual
+  $("aTabla").innerHTML = `<table class="tbl"><thead><tr><th>Mes</th><th class="num">Ingresos</th><th class="num">Egresos</th><th class="num">Utilidad</th><th class="num">Acumulada</th></tr></thead><tbody>` +
+    d.meses.map(m => `<tr><td>${MES3[m.k]}</td><td class="num">${m.ing?fmt(m.ing):"—"}</td><td class="num">${m.egr?fmt(m.egr):"—"}</td><td class="num ${m.util<0?"neg":""}">${m.ing||m.egr?fmt(m.util):"—"}</td><td class="num">${fmt(m.acum)}</td></tr>`).join("") +
+    `</tbody><tfoot><tr><td>Total</td><td class="num">${fmt(d.tI)}</td><td class="num">${fmt(d.tE)}</td><td class="num ${util<0?"neg":""}">${fmt(util)}</td><td></td></tr></tfoot></table>`;
+
+  // Egresos por concepto
+  const cons = [...new Set(CON_EGR.concat(d.eA.map(e => e.concepto)))].map(c => { const v = sum(d.eA.filter(e => e.concepto === c)); return { c, v }; }).filter(x => x.v > 0).sort((a,b) => b.v - a.v);
+  $("aCon").innerHTML = !cons.length ? `<div class="empty">Sin egresos en ${A}.</div>` :
+    cons.map(x => `<div class="conrow"><div class="h"><span>${ICON_EGR[x.c]||"📌"} ${esc(x.c)}</span><b>${fmt(x.v)}</b></div>
+      <div class="bar"><i style="width:${(x.v/cons[0].v*100).toFixed(1)}%;background:var(--s2)"></i></div>
+      <div class="t2">${(x.v/d.tE*100).toFixed(0)}% de los egresos · promedio ${fmt(x.v/mesesCorridos)}/mes${d.tI?` · ${(x.v/d.tI*100).toFixed(0)}% de los ingresos`:""}</div></div>`).join("");
+
+  // Rentabilidad por inmueble
+  const inms = inmOrdenados().filter(i => !I || i.id === I);
+  $("aInmTabla").innerHTML = !inms.length ? `<div class="empty">Registra tus inmuebles para ver su rentabilidad.</div>` :
+    inms.map(i => {
+      const di = datosAnalisis(A, i.id), u = di.tI - di.tE;
+      const mesesArr = new Set(di.iA.filter(x => x.concepto === "Arriendo").map(x => String(x.fecha).slice(5,7))).size;
+      return `<div class="item" data-inm="${esc(i.id)}"><div class="tx"><div class="t1">${esc(etq(i.id))}</div>
+        <div class="t2">Ingresos ${fmt(di.tI)} · Egresos ${fmt(di.tE)}</div>
+        <div class="t2">Margen ${di.tI?(u/di.tI*100).toFixed(0)+"%":"—"} · Arriendo recibido ${mesesArr} de ${mesesCorridos} meses</div></div>
+        <div class="amt ${u>=0?"pos":"neg"}">${fmt(u)}</div></div>`;
+    }).join("");
+  $("aInmTabla").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "datos"));
+}
+
+function dibujarMensual(meses){
+  const box = $("aChart");
+  const max = Math.max(1, ...meses.map(m => Math.max(m.ing, m.egr)));
+  const W = Math.max(320, box.clientWidth || 340), H = 220, padL = 44, padB = 22, padT = 8, h = H - padB - padT;
+  const banda = (W - padL - 4) / 12, bw = Math.min(12, (banda - 6) / 2);
+  const paso = (() => { const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw))); const n = raw / p; return (n<=1?1:n<=2?2:n<=5?5:10) * p; })();
+  const top = Math.ceil(max / paso) * paso, y = v => padT + h - v / top * h;
+  const corto = v => v >= 1e6 ? (v/1e6).toLocaleString("es-CO",{maximumFractionDigits:1}) + "M" : v >= 1e3 ? Math.round(v/1e3) + "k" : String(v);
+  const barra = (x, v, color) => { if(!v) return ""; const yy = y(v), hh = padT + h - yy, r = Math.min(4, hh); return `<path d="M${x},${padT+h} V${yy+r} Q${x},${yy} ${x+r},${yy} H${x+bw-r} Q${x+bw},${yy} ${x+bw},${yy+r} V${padT+h} Z" fill="${color}"/>`; };
+  let g = "";
+  for(let v = 0; v <= top + 1e-9; v += paso) g += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/><text x="${padL-6}" y="${y(v)+4}" text-anchor="end" class="ax">${corto(v)}</text>`;
+  meses.forEach((m, k) => {
+    const cx = padL + banda * k + banda / 2;
+    g += barra(cx - bw - 1, m.ing, "var(--s1)") + barra(cx + 1, m.egr, "var(--s2)");
+    g += `<text x="${cx}" y="${H-6}" text-anchor="middle" class="ax">${MES3[k].slice(0,1)}</text>`;
+    g += `<rect x="${padL + banda*k}" y="${padT}" width="${banda}" height="${h}" fill="transparent" data-k="${k}" class="hit"/>`;
+  });
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Ingresos y egresos por mes">${g}</svg><div class="tip hide" id="aTip"></div>`;
+  const tip = $("aTip");
+  box.querySelectorAll(".hit").forEach(r => {
+    const mostrar = () => {
+      const m = meses[+r.dataset.k];
+      box.querySelectorAll(".hit").forEach(z => z.setAttribute("fill", z === r ? "rgba(29,92,134,.07)" : "transparent"));
+      tip.innerHTML = `<b>${MESES[m.k]}</b><div><i style="background:var(--s1)"></i>Ingresos <span>${fmt(m.ing)}</span></div><div><i style="background:var(--s2)"></i>Egresos <span>${fmt(m.egr)}</span></div><div style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px">Utilidad <span class="${m.util<0?"neg":""}">${fmt(m.util)}</span></div>`;
+      tip.classList.remove("hide");
+      const bx = box.getBoundingClientRect(), rb = r.getBoundingClientRect();
+      let left = rb.left - bx.left + rb.width / 2 - tip.offsetWidth / 2;
+      tip.style.left = Math.max(0, Math.min(bx.width - tip.offsetWidth, left)) + "px";
+    };
+    r.addEventListener("click", mostrar); r.addEventListener("mouseenter", mostrar);
+  });
+  box.onmouseleave = () => { tip.classList.add("hide"); box.querySelectorAll(".hit").forEach(z => z.setAttribute("fill", "transparent")); };
+}
+["aAnio","aInm"].forEach(id => $(id).onchange = renderAnalisis);
+window.addEventListener("resize", () => { if(tab === "analisis") renderAnalisis(); });
+
+/* =====================================================================
+   MENÚ: Excel e importación
+   ===================================================================== */
+$("btnXls").onclick = descargarExcel;
 $("btnMenu").onclick = () => {
   abrirHoja(`<h3>Opciones</h3>
-    <div class="t2" style="white-space:normal;margin-bottom:6px">${cuenta ? `Conectada como <b>${esc(cuenta.username)}</b>${meta.lastSync?` · última sincronización ${new Date(meta.lastSync).toLocaleString("es-CO")}`:""}` : "Sin conectar a OneDrive"}</div>
-    <div class="menu-item" id="mXlsOD"><span style="font-size:22px">☁️</span><div>Guardar copia en Excel en OneDrive<small>Crea “Mis_Inmuebles.xlsx” en la carpeta de la app en tu OneDrive.</small></div></div>
-    <div class="menu-item" id="mXls"><span style="font-size:22px">📤</span><div>Descargar Excel<small>Inmuebles, administración, ingresos, egresos e inventario.</small></div></div>
-    <div class="menu-item" id="mImp"><span style="font-size:22px">📥</span><div>Importar desde Excel<small>Carga un archivo exportado por esta app (o por la versión anterior en Claude).</small></div></div>
-    ${cuenta ? `<div class="menu-item" id="mOut"><span style="font-size:22px">🚪</span><div>Cerrar sesión de Microsoft</div></div>`
-             : (CLIENT_ID ? `<div class="menu-item" id="mIn"><span style="font-size:22px">🔐</span><div>Conectar OneDrive</div></div>` : "")}
-    ${CLIENT_ID && !(window.APP_CONFIG && window.APP_CONFIG.clientId) ? `<div class="menu-item" id="mCfg"><span style="font-size:22px">⚙️</span><div>Cambiar ID de la aplicación<small>Solo si registraste la app de nuevo en Microsoft.</small></div></div>` : ""}
+    <div class="t2" style="white-space:normal;margin-bottom:6px">Los datos se guardan en este celular.${meta.lastBackup ? ` Último Excel descargado: ${new Date(meta.lastBackup).toLocaleDateString("es-CO")}.` : ""}</div>
+    <div class="menu-item" id="mXls"><span style="font-size:22px">📤</span><div>Descargar base de datos en Excel<small>Inmuebles, administración, ingresos, egresos, inventario y análisis mensual. Sirve de respaldo.</small></div></div>
+    <div class="menu-item" id="mImp"><span style="font-size:22px">📥</span><div>Importar desde Excel<small>Recupera un respaldo o pasa los datos a otro celular.</small></div></div>
     <div class="btns"><button class="btn sec" id="mCer">Cerrar</button></div>`);
   $("mCer").onclick = cerrarHoja;
   $("mXls").onclick = () => { cerrarHoja(); descargarExcel(); };
-  $("mXlsOD").onclick = () => { cerrarHoja(); excelAOneDrive(); };
   $("mImp").onclick = () => { cerrarHoja(); $("fileImport").value = ""; $("fileImport").click(); };
-  if($("mOut")) $("mOut").onclick = cerrarSesion;
-  if($("mIn")) $("mIn").onclick = iniciarSesion;
-  if($("mCfg")) $("mCfg").onclick = () => { try{ localStorage.removeItem("mi_clientId"); }catch(e){} location.reload(); };
 };
 
 function libroExcel(){
   const wb = XLSX.utils.book_new();
   const hoja = (rows, hdr, name) => { const ws = XLSX.utils.json_to_sheet(rows, { header: hdr }); ws["!cols"] = hdr.map(h => ({ wch: /Inmueble|Notas|Observ|Descrip|Conjunto|Administrador|Empresa|Correo/.test(h) ? 28 : 14 })); XLSX.utils.book_append_sheet(wb, ws, name); };
+  const ing = lista("ingresos"), egr = lista("egresos");
+  // Análisis mensual: una fila por inmueble y mes con movimientos
+  const claves = new Map();
+  for(const x of ing) { const k = x.inmuebleId + "|" + String(x.fecha).slice(0,7); const o = claves.get(k) || { i:0, e:0 }; o.i += +x.valor||0; claves.set(k, o); }
+  for(const x of egr) { const k = x.inmuebleId + "|" + String(x.fecha).slice(0,7); const o = claves.get(k) || { i:0, e:0 }; o.e += +x.valor||0; claves.set(k, o); }
+  const mensual = [...claves.entries()].map(([k, o]) => { const [id, ym] = k.split("|"); const i = getR("inmuebles", id) || {}; return { Año:Number(ym.slice(0,4)), Mes:Number(ym.slice(5,7)), Nombre_Mes:MESES[Number(ym.slice(5,7))-1]||"", Conjunto:i.conjunto||"", Torre:i.torre||"", Apartamento:i.apartamento||"", Inmueble:etq(id), Ingresos:o.i, Egresos:o.e, Utilidad:o.i-o.e }; })
+    .sort((a,b) => a.Año-b.Año || a.Mes-b.Mes || a.Inmueble.localeCompare(b.Inmueble, "es", { numeric:true }));
+  hoja(mensual, ["Año","Mes","Nombre_Mes","Conjunto","Torre","Apartamento","Inmueble","Ingresos","Egresos","Utilidad"], "Analisis_Mensual");
   hoja(inmOrdenados().map(i => { const a = i.admin || {}; return { ID:i.id, Conjunto:i.conjunto, Torre:i.torre, Apartamento:i.apartamento, Propietario:i.propietario||"", Ciudad:i.ciudad||"", Notas:i.notas||"",
       Administrador:a.nombre||"", Empresa_Admin:a.empresa||"", Telefono_Admin:a.telefono||"", Correo_Admin:a.correo||"", Cuota_Admin:a.cuota||"", Dia_Pago:a.diaPago||"", Referencia_Pago:a.referencia||"", Notas_Admin:a.notas||"" }; }),
     ["ID","Conjunto","Torre","Apartamento","Propietario","Ciudad","Notas","Administrador","Empresa_Admin","Telefono_Admin","Correo_Admin","Cuota_Admin","Dia_Pago","Referencia_Pago","Notas_Admin"], "Inmuebles");
-  hoja(lista("ingresos").sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(g => ({ ID:g.id, Fecha:g.fecha, ID_Inmueble:g.inmuebleId, Inmueble:etq(g.inmuebleId), Concepto:g.concepto, Valor:+g.valor||0, Medio_Pago:g.medio||"", Notas:g.notas||"" })),
-    ["ID","Fecha","ID_Inmueble","Inmueble","Concepto","Valor","Medio_Pago","Notas"], "Ingresos");
-  hoja(lista("egresos").sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(e => ({ ID:e.id, Fecha:e.fecha, ID_Inmueble:e.inmuebleId, Inmueble:etq(e.inmuebleId), Concepto:e.concepto, Periodo:e.periodo||"", Valor:+e.valor||0, Estado:e.estado||"", Notas:e.notas||"" })),
-    ["ID","Fecha","ID_Inmueble","Inmueble","Concepto","Periodo","Valor","Estado","Notas"], "Egresos");
-  hoja(lista("inventario").sort((a,b) => (etq(a.inmuebleId)+a.espacio+a.nombre).localeCompare(etq(b.inmuebleId)+b.espacio+b.nombre, "es")).map(x => ({ ID:x.id, ID_Inmueble:x.inmuebleId, Inmueble:etq(x.inmuebleId), Espacio:x.espacio||"", Elemento:x.nombre, Cantidad:Number(x.cantidad)||1, Estado:x.estado||"", Descripcion:x.descripcion||"", Observaciones:x.observaciones||"", Foto:x.foto ? "fotos/" + x.foto : "" })),
-    ["ID","ID_Inmueble","Inmueble","Espacio","Elemento","Cantidad","Estado","Descripcion","Observaciones","Foto"], "Inventario");
+  const mov = (x) => { const i = getR("inmuebles", x.inmuebleId) || {}; return { Año:Number(String(x.fecha).slice(0,4))||"", Mes:Number(String(x.fecha).slice(5,7))||"", Conjunto:i.conjunto||"", Torre:i.torre||"", Apartamento:i.apartamento||"" }; };
+  hoja(ing.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(g => ({ ID:g.id, Fecha:g.fecha, ...mov(g), ID_Inmueble:g.inmuebleId, Inmueble:etq(g.inmuebleId), Concepto:g.concepto, Valor:+g.valor||0, Medio_Pago:g.medio||"", Notas:g.notas||"" })),
+    ["ID","Fecha","Año","Mes","Conjunto","Torre","Apartamento","ID_Inmueble","Inmueble","Concepto","Valor","Medio_Pago","Notas"], "Ingresos");
+  hoja(egr.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(e => ({ ID:e.id, Fecha:e.fecha, ...mov(e), ID_Inmueble:e.inmuebleId, Inmueble:etq(e.inmuebleId), Concepto:e.concepto, Periodo:e.periodo||"", Valor:+e.valor||0, Estado:e.estado||"", Notas:e.notas||"" })),
+    ["ID","Fecha","Año","Mes","Conjunto","Torre","Apartamento","ID_Inmueble","Inmueble","Concepto","Periodo","Valor","Estado","Notas"], "Egresos");
+  hoja(lista("inventario").sort((a,b) => (etq(a.inmuebleId)+a.espacio+a.nombre).localeCompare(etq(b.inmuebleId)+b.espacio+b.nombre, "es")).map(x => ({ ID:x.id, ID_Inmueble:x.inmuebleId, Inmueble:etq(x.inmuebleId), Espacio:x.espacio||"", Elemento:x.nombre, Cantidad:Number(x.cantidad)||1, Estado:x.estado||"", Descripcion:x.descripcion||"", Observaciones:x.observaciones||"" })),
+    ["ID","ID_Inmueble","Inmueble","Espacio","Elemento","Cantidad","Estado","Descripcion","Observaciones"], "Inventario");
   return XLSX.write(wb, { bookType:"xlsx", type:"array" });
 }
 async function descargarExcel(){
   if(typeof XLSX === "undefined") return toast("El componente de Excel aún está cargando");
   const nombre = `Mis_Inmuebles_${hoy()}.xlsx`;
   const blob = new Blob([libroExcel()], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const marcar = () => { meta.lastBackup = new Date().toISOString(); guardarLocal(); renderAviso(); pintarEstado(); };
   const file = new File([blob], nombre, { type: blob.type });
-  if(navigator.canShare && navigator.canShare({ files:[file] })){
-    try{ await navigator.share({ files:[file], title:nombre }); return; }catch(e){ if(e.name === "AbortError") return; }
+  if(navigator.canShare && navigator.canShare({ files:[file] }) && /Android|iPhone|iPad/i.test(navigator.userAgent)){
+    try{ await navigator.share({ files:[file], title:nombre }); marcar(); return; }catch(e){ if(e.name === "AbortError") return; }
   }
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
-}
-async function excelAOneDrive(){
-  if(!cuenta) return toast("Primero conecta OneDrive");
-  if(typeof XLSX === "undefined") return toast("El componente de Excel aún está cargando");
-  try{
-    toast("Guardando Excel en OneDrive…");
-    const r = await graph(`${AROOT}:/Mis_Inmuebles.xlsx:/content`, { method:"PUT", headers:{ "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, body: libroExcel() });
-    if(r.status === 423) return toast("El Excel está abierto en otro lado. Ciérralo e intenta de nuevo.");
-    if(!r.ok) throw new Error(r.status);
-    toast("Excel guardado en OneDrive ✔");
-  }catch(e){ toast("No se pudo guardar el Excel en OneDrive"); }
+  marcar(); toast("Excel descargado ✔");
 }
 $("fileImport").onchange = async ev => {
   const f = ev.target.files[0]; if(!f) return;
@@ -862,12 +846,11 @@ $("fileImport").onchange = async ev => {
       admin:{ nombre:s(r.Administrador), empresa:s(r.Empresa_Admin), telefono:s(r.Telefono_Admin), correo:s(r.Correo_Admin), cuota:num(r.Cuota_Admin)||"", diaPago:num(r.Dia_Pago)||"", referencia:s(r.Referencia_Pago), notas:s(r.Notas_Admin) } }));
     const ing = h("Ingresos").filter(r => r.Fecha).map(r => ({ id:okId(r.ID), fecha:s(r.Fecha).slice(0,10), inmuebleId:s(r.ID_Inmueble), concepto:s(r.Concepto)||"Otro", valor:num(r.Valor), medio:s(r.Medio_Pago), notas:s(r.Notas) }));
     const egr = h("Egresos").filter(r => r.Fecha).map(r => ({ id:okId(r.ID), fecha:s(r.Fecha).slice(0,10), inmuebleId:s(r.ID_Inmueble), concepto:s(r.Concepto)||"Otro", periodo:s(r.Periodo), valor:num(r.Valor), estado:s(r.Estado)||"Pagado", notas:s(r.Notas) }));
-    const inv = h("Inventario").filter(r => r.Elemento).map(r => ({ id:okId(r.ID), inmuebleId:s(r.ID_Inmueble), espacio:s(r.Espacio)||"General", nombre:s(r.Elemento), cantidad:num(r.Cantidad)||1, estado:s(r.Estado)||"Bueno", descripcion:s(r.Descripcion), observaciones:s(r.Observaciones), foto:s(r.Foto).replace(/^fotos\//, "") }));
+    const inv = h("Inventario").filter(r => r.Elemento).map(r => ({ id:okId(r.ID), inmuebleId:s(r.ID_Inmueble), espacio:s(r.Espacio)||"General", nombre:s(r.Elemento), cantidad:num(r.Cantidad)||1, estado:s(r.Estado)||"Bueno", descripcion:s(r.Descripcion), observaciones:s(r.Observaciones), foto:(getR("inventario", s(r.ID))||{}).foto||"" }));
     if(!(await confirmar(`Se cargarán ${inm.length} inmuebles, ${ing.length} ingresos, ${egr.length} egresos y ${inv.length} elementos de inventario. Los registros con el mismo ID se reemplazan.`, "Importar"))) return;
     const t = Date.now();
     for(const [c, arr] of [["inmuebles",inm],["ingresos",ing],["egresos",egr],["inventario",inv]]) for(const r of arr){ r.upd = t; D[c][r.id] = r; }
-    meta.dirty = true; await guardarLocal(); renderTodo(); programarSync(200);
-    toast(`Importación lista ✔`);
+    await guardarLocal(); renderTodo(); toast("Importación lista ✔");
   }catch(e){ console.error(e); toast("El archivo no tiene el formato esperado"); }
 };
 
@@ -875,27 +858,22 @@ $("fileImport").onchange = async ev => {
    RENDER GENERAL E INICIO
    ===================================================================== */
 function renderTodo(){
-  for(const id of ["fgInm","feInm","rInm"]){ const s = $(id), v = s.value; s.innerHTML = opcInm(v, true); if([...s.options].some(o => o.value === v)) s.value = v; }
+  for(const id of ["fgInm","feInm","rInm","aInm"]){ const s = $(id), v = s.value; s.innerHTML = opcInm(v, true); if([...s.options].some(o => o.value === v)) s.value = v; }
   const fc = $("feCon"), vc = fc.value; fc.innerHTML = `<option value="">Todos los conceptos</option>` + CON_EGR.map(c => `<option>${c}</option>`).join(""); fc.value = vc;
-  renderResumen(); renderInmuebles(); renderIngresos(); renderEgresos();
+  renderResumen(); renderInmuebles(); renderIngresos(); renderEgresos(); renderAnalisis();
   if(inmActual) renderDetalle();
   renderAviso(); pintarEstado();
 }
 ["rAnio","rMes","rInm"].forEach(id => $(id).onchange = renderResumen);
 ["fgMes","fgInm"].forEach(id => $(id).onchange = renderIngresos);
 ["feMes","feInm","feCon","feEst"].forEach(id => $(id).onchange = renderEgresos);
-window.addEventListener("online", () => { pintarEstado(); programarSync(300); });
-window.addEventListener("offline", pintarEstado);
-document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible" && cuenta) programarSync(500); });
 
 (async () => {
   const d = await IDB.get("datos"), m = await IDB.get("meta");
   if(d) D = fusionar(d, {});
-  if(m) meta = { ...meta, ...m, pendFotos: m.pendFotos || [] };
+  if(m) meta = { ...meta, ...m };
   renderTodo();
-  await iniciarAuth();
-  renderTodo();
-  if(cuenta) sincronizar();
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
   if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>

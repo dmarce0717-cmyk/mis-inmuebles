@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d5c86">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Inmuebles">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Mis Inmuebles</title>
+<script src="config.js"></script>
+<script src="lib/msal-browser.min.js"></script>
+<script src="lib/xlsx.full.min.js" defer></script>
+<style>
+  :root{
+    --bg:#f3f5f7; --card:#fff; --ink:#18212b; --muted:#6a7684; --line:#e3e8ed;
+    --pri:#1d5c86; --pri2:#e7f0f7; --ok:#18804f; --okbg:#e5f4ec; --bad:#bf3a2b; --badbg:#fbecea;
+    --warn:#a8680f; --warnbg:#fdf3e1;
+    --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;font-size:15px}
+  header{position:sticky;top:0;z-index:5;background:var(--pri);color:#fff;padding:calc(12px + var(--safe-t)) 14px 12px;display:flex;align-items:center;gap:10px}
+  header .ttl{flex:1;min-width:0}
+  header h1{margin:0;font-size:18px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .sub{font-size:12px;opacity:.85;margin-top:2px;display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#ffb4a8;display:inline-block}
+  .dot.ok{background:#7ee2b0}.dot.sync{background:#ffe08a}
+  .iconbtn{background:rgba(255,255,255,.14);border:none;color:#fff;font-size:20px;min-width:38px;height:38px;border-radius:10px;cursor:pointer;flex:none}
+  main{padding:14px 14px calc(96px + var(--safe-b));max-width:760px;margin:0 auto}
+  .tab{display:none}.tab.active{display:block}
+  nav.bottom{position:fixed;left:0;right:0;bottom:0;z-index:6;background:#fff;border-top:1px solid var(--line);display:flex;padding-bottom:var(--safe-b)}
+  nav.bottom button{flex:1;border:none;background:none;padding:9px 2px 8px;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+  nav.bottom button .ic{font-size:21px;line-height:1}
+  nav.bottom button.active{color:var(--pri);font-weight:650}
+  .fab{position:fixed;right:18px;bottom:calc(76px + var(--safe-b));z-index:6;width:56px;height:56px;border-radius:50%;border:none;background:var(--pri);color:#fff;font-size:30px;box-shadow:0 6px 18px rgba(29,92,134,.35);cursor:pointer}
+  .hide{display:none!important}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  .card h2{margin:0 0 10px;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .card h2 .lnk{font-size:13px;font-weight:600;color:var(--pri);background:none;border:none;cursor:pointer;padding:4px}
+  .filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .filters > *{flex:1;min-width:130px}
+  select,input,textarea{font:inherit;font-size:16px;width:100%;padding:10px 11px;border:1px solid #cfd7de;border-radius:10px;background:#fff;color:var(--ink)}
+  textarea{min-height:70px;resize:vertical}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px}
+  .kpi .l{font-size:12px;color:var(--muted)}
+  .kpi .v{font-size:19px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums;word-break:break-all}
+  .pos{color:var(--ok)}.neg{color:var(--bad)}.wrn{color:var(--warn)}
+  .item{display:flex;align-items:center;gap:12px;padding:12px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+  .item:last-child{border-bottom:none}
+  .av{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:19px;flex:none;background:var(--pri2);overflow:hidden}
+  .av img{width:100%;height:100%;object-fit:cover}
+  .tx{flex:1;min-width:0}
+  .t1{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t2{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .amt{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:650;margin-top:3px}
+  .pill.ok{background:var(--okbg);color:var(--ok)} .pill.pend{background:var(--warnbg);color:var(--warn)} .pill.bad{background:var(--badbg);color:var(--bad)}
+  .empty{color:var(--muted);text-align:center;padding:22px 10px;font-size:14px}
+  .total{display:flex;justify-content:space-between;font-weight:700;padding:10px 2px 0;border-top:2px solid var(--line);margin-top:4px}
+  .bar{height:8px;border-radius:5px;background:var(--pri2);overflow:hidden;margin-top:6px}
+  .bar > i{display:block;height:100%;background:var(--pri)}
+  .conrow{padding:9px 0;border-bottom:1px solid var(--line)} .conrow:last-child{border-bottom:none}
+  .conrow .h{display:flex;justify-content:space-between;font-size:14px}
+  .group-h{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 4px 6px}
+  .notice{background:var(--warnbg);border:1px solid #f0d8a6;color:#6e4a0c;border-radius:12px;padding:12px 13px;font-size:13.5px;margin-bottom:12px}
+  .notice.err{background:var(--badbg);border-color:#efc3bd;color:#7c2219}
+  .notice.info{background:var(--pri2);border-color:#c5dbeb;color:#18486a}
+  .notice .btn{margin-top:10px}
+  code.uri{display:block;background:#fff;border:1px dashed #c5dbeb;border-radius:8px;padding:8px;margin:6px 0;font-size:13px;word-break:break-all;user-select:all}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px}
+  .kv .k{color:var(--muted)}
+  .kv a{color:var(--pri);text-decoration:none;font-weight:600}
+  .stats3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+  .stats3 .l{font-size:11.5px;color:var(--muted)} .stats3 .v{font-weight:700;font-size:15px;margin-top:3px;font-variant-numeric:tabular-nums}
+  .back{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--pri);font:inherit;font-weight:650;padding:4px 0 10px;cursor:pointer}
+  .seg{display:flex;background:#e6ebf0;border-radius:11px;padding:3px;margin-bottom:12px}
+  .seg button{flex:1;border:none;background:none;padding:8px 4px;border-radius:9px;font:inherit;font-size:13.5px;color:var(--muted);cursor:pointer}
+  .seg button.on{background:#fff;color:var(--ink);font-weight:650;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  /* hoja modal */
+  .overlay{position:fixed;inset:0;background:rgba(15,23,32,.45);z-index:20;display:none;align-items:flex-end;justify-content:center}
+  .overlay.show{display:flex}
+  .sheet{background:#fff;width:100%;max-width:560px;max-height:92vh;overflow-y:auto;border-radius:18px 18px 0 0;padding:8px 16px calc(18px + var(--safe-b))}
+  @media(min-width:700px){.overlay{align-items:center}.sheet{border-radius:18px}}
+  .grab{width:40px;height:5px;border-radius:3px;background:#d5dbe1;margin:4px auto 10px}
+  .sheet h3{margin:0 0 4px;font-size:17px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .btns{display:flex;gap:10px;margin-top:16px}
+  .btn{flex:1;font:inherit;font-weight:650;border:1px solid var(--pri);background:var(--pri);color:#fff;padding:12px;border-radius:12px;cursor:pointer;text-align:center}
+  .btn.sec{background:#fff;color:var(--pri)}
+  .btn.del{background:#fff;color:var(--bad);border-color:#e9b9b3}
+  .btn.ok{background:var(--ok);border-color:var(--ok)}
+  .btn.sm{flex:none;padding:8px 12px;font-size:13.5px}
+  .btn:disabled{opacity:.5}
+  .menu-item{display:flex;gap:12px;align-items:center;padding:14px 4px;border-bottom:1px solid var(--line);cursor:pointer;font-size:15px}
+  .menu-item:last-child{border-bottom:none}
+  .menu-item small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + var(--safe-b));background:#18212b;color:#fff;padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:30;max-width:90vw;text-align:center}
+  .toast.show{opacity:1}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .chip{border:1px solid #cfd7de;background:#fff;border-radius:16px;padding:7px 12px;font-size:13.5px;cursor:pointer;font-family:inherit}
+  .chip.on{background:var(--pri);border-color:var(--pri);color:#fff}
+  .foto-prev{margin-top:8px;display:flex;gap:10px;align-items:center}
+  .foto-prev img{width:96px;height:96px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
+  .fotobtn{display:flex;align-items:center;justify-content:center;gap:8px;border:1.5px dashed #b9c6d2;border-radius:12px;padding:14px;color:var(--pri);font-weight:600;cursor:pointer;background:#fafcfd}
+  .visor{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:40;display:none;align-items:center;justify-content:center}
+  .visor.show{display:flex}
+  .visor img{max-width:100%;max-height:100%}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="ttl"><h1 id="hdrTitle">🏢 Mis Inmuebles</h1><div class="sub"><span class="dot" id="syncDot"></span><span id="hdrSub">Cargando…</span></div></div>
+  <button class="iconbtn" id="btnSync" aria-label="Sincronizar">⟳</button>
+  <button class="iconbtn" id="btnMenu" aria-label="Menú">⋯</button>
+</header>
+
+<main>
+  <div id="notice"></div>
+
+  <!-- RESUMEN -->
+  <section class="tab active" id="tab-resumen">
+    <div class="filters"><select id="rAnio"></select><select id="rMes"></select></div>
+    <div class="filters"><select id="rInm"></select></div>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Ingresos</div><div class="v pos" id="kIng">$0</div></div>
+      <div class="kpi"><div class="l">Egresos</div><div class="v neg" id="kEgr">$0</div></div>
+      <div class="kpi"><div class="l">Balance</div><div class="v" id="kBal">$0</div></div>
+      <div class="kpi"><div class="l">Por pagar</div><div class="v wrn" id="kPend">$0</div></div>
+    </div>
+    <div class="card"><h2>Balance por inmueble</h2><div id="resInm"></div></div>
+    <div class="card"><h2>Egresos por concepto</h2><div id="resCon"></div></div>
+  </section>
+
+  <!-- INMUEBLES -->
+  <section class="tab" id="tab-inmuebles"><div id="listInm"></div></section>
+
+  <!-- DETALLE DE UN INMUEBLE -->
+  <section class="tab" id="tab-detalle">
+    <button class="back" id="btnVolver">‹ Inmuebles</button>
+    <div class="seg" id="segDet">
+      <button data-s="admin" class="on">Administrador</button>
+      <button data-s="inventario">Inventario</button>
+      <button data-s="datos">Datos y saldo</button>
+    </div>
+    <div id="detAdmin"></div>
+    <div id="detInventario" class="hide"></div>
+    <div id="detDatos" class="hide"></div>
+  </section>
+
+  <!-- INGRESOS -->
+  <section class="tab" id="tab-ingresos">
+    <div class="filters"><input type="month" id="fgMes" aria-label="Mes"><select id="fgInm"></select></div>
+    <div class="card"><div id="listIng"></div></div>
+  </section>
+
+  <!-- EGRESOS -->
+  <section class="tab" id="tab-egresos">
+    <div class="filters"><input type="month" id="feMes" aria-label="Mes"><select id="feInm"></select></div>
+    <div class="filters"><select id="feCon"></select>
+      <select id="feEst"><option value="">Todos los estados</option><option>Pagado</option><option>Pendiente</option></select></div>
+    <div class="card"><div id="listEgr"></div></div>
+  </section>
+</main>
+
+<button class="fab hide" id="fab" aria-label="Agregar">+</button>
+
+<nav class="bottom">
+  <button class="active" data-tab="resumen"><span class="ic">📊</span>Resumen</button>
+  <button data-tab="inmuebles"><span class="ic">🏠</span>Inmuebles</button>
+  <button data-tab="ingresos"><span class="ic">⬇️</span>Ingresos</button>
+  <button data-tab="egresos"><span class="ic">⬆️</span>Egresos</button>
+</nav>
+
+<div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
+<div class="visor" id="visor"><img id="visorImg" alt=""></div>
+<input type="file" id="fileImport" accept=".xlsx" style="display:none">
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   UTILIDADES
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => "$" + Math.round(Number(n)||0).toLocaleString("es-CO");
+const pad = n => String(n).padStart(2,"0");
+const hoy = () => { const d=new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const CON_ING = ["Arriendo","Depósito","Reintegro","Parqueadero","Otro"];
+const CON_EGR = ["Administración","Agua","Energía","Gas","Internet","Predial","Mantenimiento","Otro"];
+const ICON_EGR = {"Administración":"🏢","Agua":"💧","Energía":"⚡","Gas":"🔥","Internet":"📶","Predial":"🧾","Mantenimiento":"🔧","Otro":"📌"};
+const ICON_ING = {"Arriendo":"🔑","Depósito":"🏦","Reintegro":"↩️","Parqueadero":"🚗","Otro":"💵"};
+const ESPACIOS = ["Sala","Comedor","Cocina","Habitación principal","Habitación 2","Habitación 3","Baño principal","Baño social","Estudio","Balcón / Patio","Zona de ropas","Parqueadero / Depósito","General"];
+const ESTADOS = ["Bueno","Regular","Malo"];
+const fechaCorta = f => { if(!f) return ""; const [y,m,d]=String(f).split("-"); return `${Number(d)} ${(MESES[Number(m)-1]||"").slice(0,3).toLowerCase()} ${y}`; };
+const periodoTxt = p => { if(!p) return ""; const [y,m]=String(p).split("-"); return `${MESES[Number(m)-1]||""} ${y}`; };
+const sum = a => a.reduce((s,x)=>s+(+x.valor||0),0);
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2800); }
+
+/* =====================================================================
+   ALMACENAMIENTO LOCAL (IndexedDB) — copia en el celular para trabajar sin internet
+   ===================================================================== */
+const IDB = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open("mis-inmuebles", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = async (mode, fn) => { const d = await open(); return new Promise((res, rej) => {
+    const t = d.transaction("kv", mode); const st = t.objectStore("kv"); const q = fn(st);
+    t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }); };
+  return {
+    get: k => tx("readonly", s => s.get(k)).catch(() => undefined),
+    set: (k, v) => tx("readwrite", s => s.put(v, k)).catch(e => console.warn(e)),
+    del: k => tx("readwrite", s => s.delete(k)).catch(() => {})
+  };
+})();
+
+/* =====================================================================
+   DATOS
+   Cada colección es un objeto {id: registro}. Cada registro lleva "upd" (fecha de cambio)
+   y, si se elimina, queda como {id, del:true, upd} para que el borrado llegue a los demás equipos.
+   ===================================================================== */
+const COLS = ["inmuebles","ingresos","egresos","inventario"];
+let D = { v:1, inmuebles:{}, ingresos:{}, egresos:{}, inventario:{} };
+let meta = { etag:null, dirty:false, lastSync:null, pendFotos:[] };
+
+const lista = col => Object.values(D[col]||{}).filter(r => r && !r.del);
+const getR = (col,id) => { const r=D[col]?.[id]; return r && !r.del ? r : null; };
+
+async function guardarLocal(){ await IDB.set("datos", D); await IDB.set("meta", meta); }
+
+function poner(col, rec){
+  rec.upd = Date.now(); D[col][rec.id] = rec;
+  meta.dirty = true; guardarLocal(); programarSync(); renderTodo();
+}
+function quitar(col, id){
+  if(!D[col][id]) return;
+  D[col][id] = { id, del:true, upd:Date.now() };
+  meta.dirty = true; guardarLocal(); programarSync(); renderTodo();
+}
+function fusionar(a, b){
+  const out = { v:1 };
+  for(const c of COLS){
+    out[c] = { ...(a?.[c]||{}) };
+    for(const [id, r] of Object.entries(b?.[c]||{})){
+      if(!out[c][id] || (r.upd||0) > (out[c][id].upd||0)) out[c][id] = r;
+    }
+  }
+  return out;
+}
+
+/* =====================================================================
+   MICROSOFT / ONEDRIVE
+   La app guarda en OneDrive › Aplicaciones › (nombre de tu registro) › datos.json y /fotos
+   ===================================================================== */
+const CLIENT_ID = (window.APP_CONFIG && window.APP_CONFIG.clientId) || (()=>{ try{return localStorage.getItem("mi_clientId")||"";}catch(e){return "";} })();
+const REDIRECT = location.origin + location.pathname.replace(/index\.html$/, "");
+const SCOPES = ["Files.ReadWrite.AppFolder", "User.Read"];
+const GRAPH = "https://graph.microsoft.com/v1.0";
+const AROOT = "/me/drive/special/approot";
+let msalApp = null, cuenta = null, authError = null;
+
+async function iniciarAuth(){
+  if(!CLIENT_ID || typeof msal === "undefined") return;
+  try{
+    msalApp = new msal.PublicClientApplication({
+      auth: { clientId: CLIENT_ID, authority: "https://login.microsoftonline.com/common", redirectUri: REDIRECT },
+      cache: { cacheLocation: "localStorage" }
+    });
+    await msalApp.initialize();
+    const r = await msalApp.handleRedirectPromise();
+    if(r && r.account) msalApp.setActiveAccount(r.account);
+    cuenta = msalApp.getActiveAccount() || msalApp.getAllAccounts()[0] || null;
+    if(cuenta) msalApp.setActiveAccount(cuenta);
+  }catch(e){ console.error(e); authError = e; }
+}
+async function iniciarSesion(){
+  if(!msalApp){ toast("Primero configura el ID de la aplicación"); return; }
+  try{ await msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" }); }
+  catch(e){ toast("No se pudo iniciar sesión: " + (e.errorCode||e.message)); }
+}
+async function cerrarSesion(){
+  if(!msalApp || !cuenta) return;
+  try{ await msalApp.logoutRedirect({ account: cuenta, postLogoutRedirectUri: REDIRECT }); }catch(e){ toast("No se pudo cerrar sesión"); }
+}
+async function token(){
+  try{ return (await msalApp.acquireTokenSilent({ scopes: SCOPES, account: cuenta })).accessToken; }
+  catch(e){
+    if(e instanceof msal.InteractionRequiredAuthError){ await msalApp.acquireTokenRedirect({ scopes: SCOPES }); }
+    throw e;
+  }
+}
+async function graph(path, opts = {}){
+  const t = await token();
+  return fetch(GRAPH + path, { ...opts, headers: { Authorization: "Bearer " + t, ...(opts.headers||{}) } });
+}
+
+/* ---------- sincronización ---------- */
+let syncing = false, otraVez = false, syncTimer = null, estadoSync = "local";
+function programarSync(ms = 1200){ clearTimeout(syncTimer); syncTimer = setTimeout(sincronizar, ms); }
+function pintarEstado(){
+  const dot = $("syncDot"), sub = $("hdrSub");
+  const n = lista("inmuebles").length;
+  const base = `${n} inmueble${n===1?"":"s"}`;
+  if(!cuenta){ dot.className="dot"; sub.textContent = base + " · sin conectar a OneDrive"; return; }
+  if(estadoSync==="sync"){ dot.className="dot sync"; sub.textContent = base + " · sincronizando…"; return; }
+  if(estadoSync==="error"){ dot.className="dot"; sub.textContent = base + " · error al sincronizar"; return; }
+  if(!navigator.onLine){ dot.className="dot sync"; sub.textContent = base + " · sin internet (se guarda en el celular)"; return; }
+  dot.className = meta.dirty ? "dot sync" : "dot ok";
+  sub.textContent = base + (meta.dirty ? " · cambios por subir" : " · OneDrive al día");
+}
+
+async function sincronizar(){
+  if(!cuenta || !navigator.onLine){ pintarEstado(); return; }
+  if(syncing){ otraVez = true; return; }
+  syncing = true; estadoSync = "sync"; pintarEstado();
+  try{
+    await subirFotosPendientes();
+    for(let intento = 0; intento < 4; intento++){
+      // 1. Leer la versión que está en OneDrive
+      let remoto = null, etagRemoto = null;
+      const m = await graph(AROOT + ":/datos.json");
+      if(m.status === 200){
+        const info = await m.json(); etagRemoto = info.eTag;
+        if(etagRemoto !== meta.etag || !meta.dirty){
+          const url = info["@microsoft.graph.downloadUrl"];
+          const c = url ? await fetch(url, { cache: "no-store" }) : await graph(AROOT + ":/datos.json:/content");
+          remoto = await c.json();
+        }
+      } else if(m.status !== 404) throw new Error("Lectura OneDrive " + m.status);
+
+      // 2. Mezclar con lo del celular
+      const mezcla = remoto ? fusionar(remoto, D) : D;
+      D = mezcla;
+      const igualQueRemoto = remoto && JSON.stringify(fusionar(remoto, {})) === JSON.stringify(mezcla);
+      if(igualQueRemoto && !(!remoto)){ meta.etag = etagRemoto; meta.dirty = false; break; }
+
+      // 3. Subir el resultado (si alguien cambió el archivo mientras tanto, se repite)
+      const h = { "Content-Type": "application/json" };
+      if(etagRemoto) h["If-Match"] = etagRemoto; else h["If-None-Match"] = "*";
+      const p = await graph(AROOT + ":/datos.json:/content", { method: "PUT", headers: h, body: JSON.stringify(D) });
+      if(p.status === 412 || p.status === 409) continue;
+      if(!p.ok) throw new Error("Escritura OneDrive " + p.status);
+      const info2 = await p.json(); meta.etag = info2.eTag; meta.dirty = false; break;
+    }
+    meta.lastSync = new Date().toISOString();
+    await guardarLocal();
+    estadoSync = "ok";
+  }catch(e){
+    console.error(e); estadoSync = "error";
+    if(!(e && e.errorCode)) toast("No se pudo sincronizar con OneDrive. Se reintentará.");
+  }finally{
+    syncing = false; renderTodo();
+    if(otraVez){ otraVez = false; programarSync(300); }
+  }
+}
+
+/* ---------- fotos ---------- */
+const fotoURL = new Map();
+async function comprimir(file){
+  let bmp;
+  try{ bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch(e){ bmp = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); }); }
+  const max = 1280, w = bmp.width, h = bmp.height, k = Math.min(1, max / Math.max(w, h));
+  const cv = document.createElement("canvas"); cv.width = Math.round(w*k); cv.height = Math.round(h*k);
+  cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+  return new Promise(res => cv.toBlob(b => res(b), "image/jpeg", 0.78));
+}
+async function guardarFoto(nombre, blob){
+  await IDB.set("foto:" + nombre, blob);
+  fotoURL.set(nombre, URL.createObjectURL(blob));
+  meta.pendFotos = meta.pendFotos.filter(p => p.n !== nombre).concat([{ op:"up", n:nombre }]);
+  await guardarLocal();
+}
+async function borrarFoto(nombre){
+  if(!nombre) return;
+  await IDB.del("foto:" + nombre); fotoURL.delete(nombre);
+  meta.pendFotos = meta.pendFotos.filter(p => p.n !== nombre).concat([{ op:"del", n:nombre }]);
+  await guardarLocal();
+}
+async function subirFotosPendientes(){
+  for(const p of [...meta.pendFotos]){
+    let ok = false;
+    if(p.op === "up"){
+      const b = await IDB.get("foto:" + p.n);
+      if(!b){ ok = true; }
+      else { const r = await graph(`${AROOT}:/fotos/${encodeURIComponent(p.n)}:/content`, { method:"PUT", headers:{ "Content-Type":"image/jpeg" }, body:b }); ok = r.ok; }
+    } else {
+      const r = await graph(`${AROOT}:/fotos/${encodeURIComponent(p.n)}`, { method:"DELETE" }); ok = r.ok || r.status === 404;
+    }
+    if(ok){ meta.pendFotos = meta.pendFotos.filter(x => !(x.n === p.n && x.op === p.op)); await guardarLocal(); }
+  }
+}
+async function urlFoto(nombre){
+  if(!nombre) return null;
+  if(fotoURL.has(nombre)) return fotoURL.get(nombre);
+  let b = await IDB.get("foto:" + nombre);
+  if(!b && cuenta && navigator.onLine){
+    try{
+      const m = await graph(`${AROOT}:/fotos/${encodeURIComponent(nombre)}`);
+      if(m.ok){ const info = await m.json(); const r = await fetch(info["@microsoft.graph.downloadUrl"]); if(r.ok){ b = await r.blob(); await IDB.set("foto:" + nombre, b); } }
+    }catch(e){ console.warn(e); }
+  }
+  if(!b) return null;
+  const u = URL.createObjectURL(b); fotoURL.set(nombre, u); return u;
+}
+async function pintarFotos(root){
+  for(const img of root.querySelectorAll("img[data-foto]")){
+    const u = await urlFoto(img.dataset.foto);
+    if(u){ img.src = u; img.parentElement.classList.remove("sinfoto"); }
+  }
+}
+$("visor").onclick = () => $("visor").classList.remove("show");
+function verFoto(nombre){ urlFoto(nombre).then(u => { if(u){ $("visorImg").src = u; $("visor").classList.add("show"); } }); }
+
+/* =====================================================================
+   NAVEGACIÓN
+   ===================================================================== */
+let tab = "resumen", inmActual = null, segActual = "admin";
+function irA(t){
+  tab = t;
+  document.querySelectorAll("nav.bottom button").forEach(x => x.classList.toggle("active", x.dataset.tab === (t==="detalle"?"inmuebles":t)));
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.id === "tab-" + t));
+  $("fab").classList.toggle("hide", t === "resumen" || t === "detalle");
+  $("hdrTitle").textContent = t === "detalle" && getR("inmuebles", inmActual) ? "🏠 " + etqCorta(inmActual) : "🏢 Mis Inmuebles";
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav.bottom button").forEach(b => b.onclick = () => irA(b.dataset.tab));
+$("fab").onclick = () => { if(tab==="inmuebles") formInmueble(); else if(tab==="ingresos") formIngreso(); else if(tab==="egresos") formEgreso(); };
+$("btnVolver").onclick = () => irA("inmuebles");
+$("segDet").querySelectorAll("button").forEach(b => b.onclick = () => { segActual = b.dataset.s; renderDetalle(); });
+function abrirDetalle(id, seg){ inmActual = id; if(seg) segActual = seg; renderDetalle(); irA("detalle"); }
+
+/* hoja modal */
+function abrirHoja(html){ $("sheet").innerHTML = `<div class="grab"></div>` + html; $("overlay").classList.add("show"); document.body.style.overflow = "hidden"; }
+function cerrarHoja(){ $("overlay").classList.remove("show"); document.body.style.overflow = ""; }
+$("overlay").addEventListener("click", e => { if(e.target.id === "overlay") cerrarHoja(); });
+function confirmar(msg, okTxt = "Eliminar"){
+  return new Promise(res => {
+    abrirHoja(`<h3>¿Estás segura?</h3><p style="color:var(--muted);margin:6px 0 0">${esc(msg)}</p>
+      <div class="btns"><button class="btn sec" id="cNo">Cancelar</button><button class="btn del" id="cSi">${esc(okTxt)}</button></div>`);
+    $("cNo").onclick = () => { cerrarHoja(); res(false); }; $("cSi").onclick = () => { cerrarHoja(); res(true); };
+  });
+}
+
+/* =====================================================================
+   INMUEBLES
+   ===================================================================== */
+const etq = id => { const i = getR("inmuebles", id); return i ? `${i.conjunto} · T${i.torre} · Apto ${i.apartamento}` : "(inmueble eliminado)"; };
+const etqCorta = id => { const i = getR("inmuebles", id); return i ? `T${i.torre} · Apto ${i.apartamento}` : ""; };
+const inmOrdenados = () => lista("inmuebles").sort((a,b) => etq(a.id).localeCompare(etq(b.id), "es", { numeric:true }));
+const opcInm = (sel, todos) => (todos ? `<option value="">Todos los inmuebles</option>` : "") + inmOrdenados().map(i => `<option value="${esc(i.id)}" ${i.id===sel?"selected":""}>${esc(etq(i.id))}</option>`).join("");
+
+function formInmueble(id){
+  const i = getR("inmuebles", id) || {};
+  const conjuntos = [...new Set(lista("inmuebles").map(x => x.conjunto))];
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} inmueble</h3>
+    <label>Nombre del conjunto *</label><input id="fConj" list="dlConj" value="${esc(i.conjunto)}" placeholder="Ej: Conjunto Los Pinos" autocomplete="off">
+    <datalist id="dlConj">${conjuntos.map(c => `<option value="${esc(c)}">`).join("")}</datalist>
+    <div class="row2"><div><label>Torre *</label><input id="fTorre" value="${esc(i.torre)}" placeholder="Ej: 3"></div>
+    <div><label>Apartamento *</label><input id="fApto" value="${esc(i.apartamento)}" placeholder="Ej: 502"></div></div>
+    <label>Propietario / Arrendatario</label><input id="fProp" value="${esc(i.propietario)}">
+    <label>Ciudad</label><input id="fCiudad" value="${esc(i.ciudad)}">
+    <label>Notas</label><input id="fNotas" value="${esc(i.notas)}">
+    <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
+  if($("bCan")) $("bCan").onclick = cerrarHoja;
+  $("bOk").onclick = () => {
+    const v = { conjunto:$("fConj").value.trim(), torre:$("fTorre").value.trim(), apartamento:$("fApto").value.trim(), propietario:$("fProp").value.trim(), ciudad:$("fCiudad").value.trim(), notas:$("fNotas").value.trim() };
+    if(!v.conjunto || !v.torre || !v.apartamento) return toast("Completa conjunto, torre y apartamento");
+    if(lista("inmuebles").some(x => x.id!==id && x.conjunto.toLowerCase()===v.conjunto.toLowerCase() && String(x.torre)===v.torre && String(x.apartamento)===v.apartamento)) return toast("Ese inmueble ya existe");
+    const nuevoId = id || uid();
+    poner("inmuebles", { ...i, ...v, id: nuevoId });
+    cerrarHoja(); toast("Inmueble guardado ✔");
+    if(!id) abrirDetalle(nuevoId, "admin");
+  };
+  if(id) $("bDel").onclick = async () => {
+    const movs = [...lista("ingresos"), ...lista("egresos"), ...lista("inventario")].filter(x => x.inmuebleId === id);
+    if(!(await confirmar(movs.length ? `Este inmueble tiene ${movs.length} registros (movimientos e inventario) que también se eliminarán.` : "Se eliminará este inmueble."))) return;
+    for(const c of ["ingresos","egresos","inventario"]) for(const r of lista(c).filter(x => x.inmuebleId === id)){ if(r.foto) await borrarFoto(r.foto); D[c][r.id] = { id:r.id, del:true, upd:Date.now() }; }
+    quitar("inmuebles", id); irA("inmuebles"); toast("Inmueble eliminado");
+  };
+}
+
+function renderInmuebles(){
+  const arr = inmOrdenados();
+  if(!arr.length){ $("listInm").innerHTML = `<div class="card"><div class="empty">Aún no tienes inmuebles.<br>Toca <b>+</b> para registrar el primero (conjunto, torre y apartamento).</div></div>`; return; }
+  const grupos = {}; arr.forEach(i => (grupos[i.conjunto] = grupos[i.conjunto] || []).push(i));
+  $("listInm").innerHTML = Object.entries(grupos).map(([c, xs]) => `<div class="group-h">${esc(c)}</div><div class="card">` +
+    xs.map(i => {
+      const bal = sum(lista("ingresos").filter(x => x.inmuebleId===i.id)) - sum(lista("egresos").filter(x => x.inmuebleId===i.id));
+      const nInv = lista("inventario").filter(x => x.inmuebleId===i.id).length;
+      return `<div class="item" data-inm="${esc(i.id)}"><div class="av">🏠</div><div class="tx"><div class="t1">Torre ${esc(i.torre)} · Apto ${esc(i.apartamento)}</div>
+        <div class="t2">${esc([i.propietario, nInv ? nInv + " elementos en inventario" : ""].filter(Boolean).join(" · ") || "Toca para ver administrador e inventario")}</div></div>
+        <div class="amt ${bal>=0?"pos":"neg"}">${fmt(bal)}</div></div>`;
+    }).join("") + `</div>`).join("");
+  $("listInm").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm));
+}
+
+/* =====================================================================
+   DETALLE: ADMINISTRADOR, INVENTARIO, DATOS
+   ===================================================================== */
+function renderDetalle(){
+  const i = getR("inmuebles", inmActual);
+  if(!i){ if(tab === "detalle") irA("inmuebles"); return; }
+  $("segDet").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.s === segActual));
+  $("detAdmin").classList.toggle("hide", segActual !== "admin");
+  $("detInventario").classList.toggle("hide", segActual !== "inventario");
+  $("detDatos").classList.toggle("hide", segActual !== "datos");
+
+  /* --- Administrador --- */
+  const a = i.admin || {};
+  const tieneAdmin = Object.values(a).some(v => v);
+  const tel = String(a.telefono||"").replace(/[^\d+]/g, "");
+  const inv = lista("inventario").filter(x => x.inmuebleId === i.id);
+  const cnt = e => inv.filter(x => x.estado === e).reduce((s,x) => s + (Number(x.cantidad)||1), 0);
+  const pagosAdm = lista("egresos").filter(e => e.inmuebleId===i.id && e.concepto==="Administración").sort((x,y) => String(y.fecha).localeCompare(String(x.fecha)));
+  $("detAdmin").innerHTML = `
+    <div class="card"><h2>Administración del conjunto <button class="lnk" id="bEdAdm">${tieneAdmin?"Editar":"Agregar"}</button></h2>
+      ${tieneAdmin ? `<div class="kv">
+        ${a.nombre?`<span class="k">Administrador</span><span>${esc(a.nombre)}</span>`:""}
+        ${a.empresa?`<span class="k">Empresa / oficina</span><span>${esc(a.empresa)}</span>`:""}
+        ${a.telefono?`<span class="k">Teléfono</span><span><a href="tel:${esc(tel)}">${esc(a.telefono)}</a></span>`:""}
+        ${a.correo?`<span class="k">Correo</span><span><a href="mailto:${esc(a.correo)}">${esc(a.correo)}</a></span>`:""}
+        ${a.cuota?`<span class="k">Cuota mensual</span><span><b>${fmt(a.cuota)}</b></span>`:""}
+        ${a.diaPago?`<span class="k">Día límite de pago</span><span>Día ${esc(a.diaPago)} de cada mes</span>`:""}
+        ${a.referencia?`<span class="k">Pago / referencia</span><span>${esc(a.referencia)}</span>`:""}
+        ${a.notas?`<span class="k">Notas</span><span>${esc(a.notas)}</span>`:""}
+      </div>` : `<div class="empty" style="padding:10px">Registra los datos del administrador del conjunto: nombre, teléfono, correo, cuota y día de pago.</div>`}
+      <div class="btns"><button class="btn sec" id="bPagAdm">+ Registrar pago de administración</button></div>
+    </div>
+    <div class="card"><h2>Inventario del apartamento <button class="lnk" id="bVerInv">Ver todo ›</button></h2>
+      <div class="stats3">
+        <div><div class="l">Elementos</div><div class="v">${inv.reduce((s,x)=>s+(Number(x.cantidad)||1),0)}</div></div>
+        <div><div class="l">Bueno · Regular</div><div class="v"><span class="pos">${cnt("Bueno")}</span> · <span class="wrn">${cnt("Regular")}</span></div></div>
+        <div><div class="l">Malo</div><div class="v neg">${cnt("Malo")}</div></div>
+      </div>
+      <div class="btns"><button class="btn" id="bAddInv">+ Agregar al inventario</button></div>
+    </div>
+    <div class="card"><h2>Últimos pagos de administración</h2>
+      ${pagosAdm.length ? pagosAdm.slice(0,6).map(e => `<div class="item" data-egr="${esc(e.id)}"><div class="av" style="background:var(--badbg)">🏢</div><div class="tx"><div class="t1">${esc(periodoTxt(e.periodo) || fechaCorta(e.fecha))}</div><div class="t2">${fechaCorta(e.fecha)}${e.notas?" · "+esc(e.notas):""}</div></div><div><div class="amt neg">${fmt(e.valor)}</div><div style="text-align:right"><span class="pill ${e.estado==="Pagado"?"ok":"pend"}">${esc(e.estado)}</span></div></div></div>`).join("")
+        : `<div class="empty" style="padding:10px">Aún no hay pagos de administración registrados.</div>`}
+    </div>`;
+  $("bEdAdm").onclick = () => formAdmin(i.id);
+  $("bPagAdm").onclick = () => formEgreso(null, { inmuebleId:i.id, concepto:"Administración", valor:a.cuota||"" });
+  $("bVerInv").onclick = () => { segActual = "inventario"; renderDetalle(); };
+  $("bAddInv").onclick = () => formInventario(null, i.id);
+  $("detAdmin").querySelectorAll("[data-egr]").forEach(el => el.onclick = () => formEgreso(el.dataset.egr));
+
+  /* --- Inventario --- */
+  const grupos = {}; inv.sort((x,y) => (x.nombre||"").localeCompare(y.nombre||"", "es")).forEach(x => (grupos[x.espacio||"General"] = grupos[x.espacio||"General"] || []).push(x));
+  const orden = Object.keys(grupos).sort((x,y) => { const ix = ESPACIOS.indexOf(x), iy = ESPACIOS.indexOf(y); return (ix<0?99:ix) - (iy<0?99:iy) || x.localeCompare(y); });
+  $("detInventario").innerHTML = `<div class="btns" style="margin:0 0 12px"><button class="btn" id="bAddInv2">+ Agregar elemento</button></div>` +
+    (inv.length ? orden.map(g => `<div class="group-h">${esc(g)}</div><div class="card">` + grupos[g].map(x => `
+      <div class="item" data-inv="${esc(x.id)}">
+        <div class="av ${x.foto?"sinfoto":""}">${x.foto?`<img data-foto="${esc(x.foto)}" alt="">`:"📦"}</div>
+        <div class="tx"><div class="t1">${esc(x.nombre)}${Number(x.cantidad)>1?` <span style="font-weight:400;color:var(--muted)">× ${esc(x.cantidad)}</span>`:""}</div>
+          <div class="t2">${esc([x.descripcion, x.observaciones].filter(Boolean).join(" · ") || "Sin observaciones")}</div></div>
+        <span class="pill ${x.estado==="Bueno"?"ok":x.estado==="Regular"?"pend":"bad"}">${esc(x.estado||"—")}</span>
+      </div>`).join("") + `</div>`).join("")
+    : `<div class="card"><div class="empty">El inventario está vacío.<br>Agrega muebles, electrodomésticos, lámparas, cortinas, llaves, etc., con su estado y una foto.</div></div>`);
+  $("bAddInv2").onclick = () => formInventario(null, i.id);
+  $("detInventario").querySelectorAll("[data-inv]").forEach(el => el.onclick = () => formInventario(el.dataset.inv, i.id));
+  pintarFotos($("detInventario"));
+
+  /* --- Datos y saldo --- */
+  const ing = lista("ingresos").filter(x => x.inmuebleId===i.id), egr = lista("egresos").filter(x => x.inmuebleId===i.id);
+  const pend = egr.filter(e => e.estado==="Pendiente");
+  $("detDatos").innerHTML = `
+    <div class="card"><h2>Datos del inmueble <button class="lnk" id="bEdInm">Editar</button></h2>
+      <div class="kv"><span class="k">Conjunto</span><span>${esc(i.conjunto)}</span><span class="k">Torre</span><span>${esc(i.torre)}</span><span class="k">Apartamento</span><span>${esc(i.apartamento)}</span>
+      ${i.propietario?`<span class="k">Propietario / Arrendatario</span><span>${esc(i.propietario)}</span>`:""}${i.ciudad?`<span class="k">Ciudad</span><span>${esc(i.ciudad)}</span>`:""}${i.notas?`<span class="k">Notas</span><span>${esc(i.notas)}</span>`:""}</div></div>
+    <div class="card"><h2>Saldo histórico</h2>
+      <div class="stats3"><div><div class="l">Ingresos</div><div class="v pos">${fmt(sum(ing))}</div></div><div><div class="l">Egresos</div><div class="v neg">${fmt(sum(egr))}</div></div><div><div class="l">Balance</div><div class="v ${sum(ing)-sum(egr)>=0?"pos":"neg"}">${fmt(sum(ing)-sum(egr))}</div></div></div>
+      ${pend.length?`<p class="wrn" style="margin:12px 0 0;font-size:13.5px">⚠ ${pend.length} egreso${pend.length>1?"s":""} pendiente${pend.length>1?"s":""} por ${fmt(sum(pend))}</p>`:""}
+      <div class="btns"><button class="btn sec" id="bVerIng">Ver ingresos</button><button class="btn sec" id="bVerEgr">Ver egresos</button></div></div>`;
+  $("bEdInm").onclick = () => formInmueble(i.id);
+  $("bVerIng").onclick = () => { $("fgInm").value = i.id; $("fgMes").value = ""; irA("ingresos"); renderIngresos(); };
+  $("bVerEgr").onclick = () => { $("feInm").value = i.id; $("feMes").value = ""; irA("egresos"); renderEgresos(); };
+}
+
+function formAdmin(id){
+  const i = getR("inmuebles", id); const a = i.admin || {};
+  abrirHoja(`<h3>Administración del conjunto</h3><div class="t2" style="white-space:normal">${esc(etq(id))}</div>
+    <label>Nombre del administrador</label><input id="aNom" value="${esc(a.nombre)}">
+    <label>Empresa / oficina de administración</label><input id="aEmp" value="${esc(a.empresa)}">
+    <div class="row2"><div><label>Teléfono</label><input id="aTel" type="tel" value="${esc(a.telefono)}"></div>
+    <div><label>Correo</label><input id="aCor" type="email" value="${esc(a.correo)}"></div></div>
+    <div class="row2"><div><label>Cuota mensual (COP)</label><input id="aCuo" type="number" inputmode="numeric" value="${esc(a.cuota)}"></div>
+    <div><label>Día límite de pago</label><input id="aDia" type="number" inputmode="numeric" min="1" max="31" value="${esc(a.diaPago)}"></div></div>
+    <label>Cuenta o referencia de pago</label><input id="aRef" value="${esc(a.referencia)}" placeholder="Ej: Banco, convenio, referencia">
+    <label>Notas</label><textarea id="aNot">${esc(a.notas)}</textarea>
+    <div class="btns"><button class="btn sec" id="bCan">Cancelar</button><button class="btn" id="bOk">Guardar</button></div>`);
+  $("bCan").onclick = cerrarHoja;
+  $("bOk").onclick = () => {
+    const admin = { nombre:$("aNom").value.trim(), empresa:$("aEmp").value.trim(), telefono:$("aTel").value.trim(), correo:$("aCor").value.trim(),
+      cuota:Number($("aCuo").value)||"", diaPago:Number($("aDia").value)||"", referencia:$("aRef").value.trim(), notas:$("aNot").value.trim() };
+    poner("inmuebles", { ...i, admin }); cerrarHoja(); toast("Datos de administración guardados ✔");
+  };
+}
+
+function formInventario(id, inmuebleId){
+  const x = getR("inventario", id) || { inmuebleId, cantidad:1, estado:"Bueno", espacio:"Sala" };
+  let estado = x.estado, fotoNueva = null, fotoQuitada = false;
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} elemento</h3><div class="t2" style="white-space:normal">${esc(etq(x.inmuebleId))}</div>
+    <label>Elemento *</label><input id="vNom" value="${esc(x.nombre)}" placeholder="Ej: Nevera, sofá, cortinas, llaves">
+    <div class="row2"><div><label>Espacio</label><input id="vEsp" list="dlEsp" value="${esc(x.espacio)}"><datalist id="dlEsp">${ESPACIOS.map(e=>`<option value="${esc(e)}">`).join("")}</datalist></div>
+    <div><label>Cantidad</label><input id="vCan" type="number" inputmode="numeric" min="1" value="${esc(x.cantidad||1)}"></div></div>
+    <label>Estado</label><div class="chips" id="vEst">${ESTADOS.map(e => `<button type="button" class="chip ${e===estado?"on":""}" data-e="${e}">${e==="Bueno"?"🟢":e==="Regular"?"🟡":"🔴"} ${e}</button>`).join("")}</div>
+    <label>Marca / modelo / descripción</label><input id="vDes" value="${esc(x.descripcion)}">
+    <label>Observaciones</label><textarea id="vObs" placeholder="Ej: rayón en la puerta, funciona bien">${esc(x.observaciones)}</textarea>
+    <label>Foto</label>
+    <div id="vFotoBox"></div>
+    <input type="file" id="vFile" accept="image/*" style="display:none">
+    <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
+  const pintarCaja = async () => {
+    const box = $("vFotoBox"); if(!box) return;
+    const actual = fotoNueva ? URL.createObjectURL(fotoNueva) : (!fotoQuitada && x.foto ? await urlFoto(x.foto) : null);
+    box.innerHTML = actual
+      ? `<div class="foto-prev"><img src="${actual}" alt="" id="vImg"><div style="display:flex;flex-direction:column;gap:8px"><button type="button" class="btn sec sm" id="vCam">Cambiar foto</button><button type="button" class="btn del sm" id="vQuit">Quitar</button></div></div>`
+      : (!fotoQuitada && x.foto ? `<div class="t2">La foto se descargará cuando haya conexión.</div>` : "") + `<div class="fotobtn" id="vCam">📷 Tomar o elegir foto</div>`;
+    $("vCam").onclick = () => $("vFile").click();
+    if($("vQuit")) $("vQuit").onclick = () => { fotoNueva = null; fotoQuitada = true; pintarCaja(); };
+    if($("vImg") && x.foto && !fotoNueva) $("vImg").onclick = () => verFoto(x.foto);
+  };
+  pintarCaja();
+  $("vFile").onchange = async ev => { const f = ev.target.files[0]; if(!f) return; try{ fotoNueva = await comprimir(f); fotoQuitada = false; pintarCaja(); }catch(e){ toast("No se pudo leer la imagen"); } };
+  $("vEst").querySelectorAll(".chip").forEach(c => c.onclick = () => { estado = c.dataset.e; $("vEst").querySelectorAll(".chip").forEach(z => z.classList.toggle("on", z === c)); });
+  if($("bCan")) $("bCan").onclick = cerrarHoja;
+  $("bOk").onclick = async () => {
+    const v = { nombre:$("vNom").value.trim(), espacio:$("vEsp").value.trim() || "General", cantidad:Math.max(1, Number($("vCan").value)||1), estado,
+      descripcion:$("vDes").value.trim(), observaciones:$("vObs").value.trim() };
+    if(!v.nombre) return toast("Escribe el nombre del elemento");
+    $("bOk").disabled = true;
+    const rid = id || uid();
+    let foto = x.foto || "";
+    if(fotoQuitada || fotoNueva){ if(x.foto) await borrarFoto(x.foto); foto = ""; }
+    if(fotoNueva){ foto = `${rid}_${Date.now().toString(36)}.jpg`; await guardarFoto(foto, fotoNueva); }
+    poner("inventario", { ...x, ...v, id:rid, foto });
+    cerrarHoja(); toast("Inventario guardado ✔");
+  };
+  if(id) $("bDel").onclick = async () => { if(await confirmar("Se eliminará este elemento del inventario.")){ if(x.foto) await borrarFoto(x.foto); quitar("inventario", id); toast("Elemento eliminado"); } };
+}
+
+/* =====================================================================
+   INGRESOS
+   ===================================================================== */
+function sinInmuebles(){ toast("Primero registra un inmueble"); irA("inmuebles"); }
+function formIngreso(id){
+  if(!lista("inmuebles").length) return sinInmuebles();
+  const g = getR("ingresos", id) || { fecha:hoy(), concepto:"Arriendo", medio:"Transferencia", inmuebleId:$("fgInm").value || "" };
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} ingreso</h3>
+    <label>Inmueble *</label><select id="fInm">${opcInm(g.inmuebleId)}</select>
+    <label>Concepto *</label><select id="fCon">${CON_ING.map(c => `<option ${c===g.concepto?"selected":""}>${c}</option>`).join("")}</select>
+    <label>Valor (COP) *</label><input id="fVal" type="number" inputmode="numeric" min="0" value="${esc(g.valor)}" placeholder="0">
+    <div class="row2"><div><label>Fecha *</label><input id="fFec" type="date" value="${esc(g.fecha)}"></div>
+    <div><label>Medio de pago</label><select id="fMed">${["Transferencia","Efectivo","Consignación","Otro"].map(c => `<option ${c===g.medio?"selected":""}>${c}</option>`).join("")}</select></div></div>
+    <label>Notas</label><input id="fNot" value="${esc(g.notas)}">
+    <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
+  if($("bCan")) $("bCan").onclick = cerrarHoja;
+  $("bOk").onclick = () => {
+    const v = { inmuebleId:$("fInm").value, concepto:$("fCon").value, valor:Number($("fVal").value), fecha:$("fFec").value, medio:$("fMed").value, notas:$("fNot").value.trim() };
+    if(!v.inmuebleId || !v.fecha || !(v.valor > 0)) return toast("Completa inmueble, fecha y valor");
+    poner("ingresos", { ...g, ...v, id: id || uid() }); cerrarHoja(); toast("Ingreso guardado ✔");
+  };
+  if(id) $("bDel").onclick = async () => { if(await confirmar("Se eliminará este ingreso.")){ quitar("ingresos", id); toast("Ingreso eliminado"); } };
+}
+function renderIngresos(){
+  const m = $("fgMes").value, i = $("fgInm").value;
+  const rows = lista("ingresos").filter(x => (!m || String(x.fecha).startsWith(m)) && (!i || x.inmuebleId === i)).sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
+  if(!rows.length){ $("listIng").innerHTML = `<div class="empty">${lista("ingresos").length ? "No hay ingresos con estos filtros." : "Aún no hay ingresos. Toca <b>+</b> para registrar uno."}</div>`; return; }
+  $("listIng").innerHTML = rows.map(g => `<div class="item" data-id="${esc(g.id)}"><div class="av" style="background:var(--okbg)">${ICON_ING[g.concepto]||"💵"}</div>
+    <div class="tx"><div class="t1">${esc(g.concepto)}</div><div class="t2">${esc(etq(g.inmuebleId))}</div><div class="t2">${fechaCorta(g.fecha)}${g.notas?" · "+esc(g.notas):""}</div></div>
+    <div class="amt pos">${fmt(g.valor)}</div></div>`).join("") + `<div class="total"><span>Total</span><span class="pos">${fmt(sum(rows))}</span></div>`;
+  $("listIng").querySelectorAll("[data-id]").forEach(el => el.onclick = () => formIngreso(el.dataset.id));
+}
+
+/* =====================================================================
+   EGRESOS
+   ===================================================================== */
+function formEgreso(id, pre){
+  if(!lista("inmuebles").length) return sinInmuebles();
+  const e = getR("egresos", id) || { fecha:hoy(), periodo:hoy().slice(0,7), concepto:"Administración", estado:"Pagado", inmuebleId:$("feInm").value || "", ...(pre||{}) };
+  let concepto = e.concepto;
+  abrirHoja(`<h3>${id?"Editar":"Nuevo"} egreso</h3>
+    <label>Inmueble *</label><select id="fInm">${opcInm(e.inmuebleId)}</select>
+    <label>Concepto *</label><div class="chips" id="fChips">${CON_EGR.map(c => `<button type="button" class="chip ${c===concepto?"on":""}" data-c="${c}">${ICON_EGR[c]} ${c}</button>`).join("")}</div>
+    <label>Valor (COP) *</label><input id="fVal" type="number" inputmode="numeric" min="0" value="${esc(e.valor)}" placeholder="0">
+    <div class="row2"><div><label>Periodo facturado</label><input id="fPer" type="month" value="${esc(e.periodo)}"></div>
+    <div><label>Estado</label><select id="fEst"><option ${e.estado==="Pagado"?"selected":""}>Pagado</option><option ${e.estado==="Pendiente"?"selected":""}>Pendiente</option></select></div></div>
+    <label>Fecha (pago o vencimiento) *</label><input id="fFec" type="date" value="${esc(e.fecha)}">
+    <label>Notas / N° de factura</label><input id="fNot" value="${esc(e.notas)}">
+    ${id && e.estado==="Pendiente" ? `<div class="btns"><button class="btn ok" id="bPag">✔ Marcar como pagado hoy</button></div>` : ""}
+    <div class="btns">${id?`<button class="btn del" id="bDel">Eliminar</button>`:`<button class="btn sec" id="bCan">Cancelar</button>`}<button class="btn" id="bOk">Guardar</button></div>`);
+  $("fChips").querySelectorAll(".chip").forEach(c => c.onclick = () => {
+    concepto = c.dataset.c; $("fChips").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
+    if(concepto === "Administración" && !$("fVal").value){ const a = getR("inmuebles", $("fInm").value)?.admin; if(a?.cuota) $("fVal").value = a.cuota; }
+  });
+  if($("bCan")) $("bCan").onclick = cerrarHoja;
+  const leer = () => ({ inmuebleId:$("fInm").value, concepto, valor:Number($("fVal").value), periodo:$("fPer").value, estado:$("fEst").value, fecha:$("fFec").value, notas:$("fNot").value.trim() });
+  $("bOk").onclick = () => {
+    const v = leer(); if(!v.inmuebleId || !v.fecha || !(v.valor > 0)) return toast("Completa inmueble, fecha y valor");
+    poner("egresos", { ...(getR("egresos", id)||{}), ...v, id: id || uid() }); cerrarHoja(); toast("Egreso guardado ✔");
+  };
+  if($("bPag")) $("bPag").onclick = () => { const v = leer(); if(!(v.valor > 0)) return toast("Indica el valor"); poner("egresos", { ...e, ...v, estado:"Pagado", fecha:hoy(), id }); cerrarHoja(); toast("Marcado como pagado ✔"); };
+  if(id) $("bDel").onclick = async () => { if(await confirmar("Se eliminará este egreso.")){ quitar("egresos", id); toast("Egreso eliminado"); } };
+}
+function renderEgresos(){
+  const m = $("feMes").value, i = $("feInm").value, c = $("feCon").value, st = $("feEst").value;
+  const rows = lista("egresos").filter(x => (!m || String(x.fecha).startsWith(m) || x.periodo === m) && (!i || x.inmuebleId === i) && (!c || x.concepto === c) && (!st || x.estado === st))
+    .sort((a,b) => (a.estado===b.estado ? 0 : a.estado==="Pendiente" ? -1 : 1) || String(b.fecha).localeCompare(String(a.fecha)));
+  if(!rows.length){ $("listEgr").innerHTML = `<div class="empty">${lista("egresos").length ? "No hay egresos con estos filtros." : "Aún no hay egresos. Toca <b>+</b> para registrar administración, agua, energía, gas o internet."}</div>`; return; }
+  $("listEgr").innerHTML = rows.map(e => `<div class="item" data-id="${esc(e.id)}"><div class="av" style="background:var(--badbg)">${ICON_EGR[e.concepto]||"📌"}</div>
+    <div class="tx"><div class="t1">${esc(e.concepto)}${e.periodo?` <span style="font-weight:400;color:var(--muted)">· ${periodoTxt(e.periodo)}</span>`:""}</div>
+    <div class="t2">${esc(etq(e.inmuebleId))}</div><div class="t2">${fechaCorta(e.fecha)}${e.notas?" · "+esc(e.notas):""}</div></div>
+    <div><div class="amt neg">${fmt(e.valor)}</div><div style="text-align:right"><span class="pill ${e.estado==="Pagado"?"ok":"pend"}">${esc(e.estado)}</span></div></div></div>`).join("")
+    + `<div class="total"><span>Total</span><span class="neg">${fmt(sum(rows))}</span></div>`;
+  $("listEgr").querySelectorAll("[data-id]").forEach(el => el.onclick = () => formEgreso(el.dataset.id));
+}
+
+/* =====================================================================
+   RESUMEN
+   ===================================================================== */
+function renderResumen(){
+  const anioAct = String(new Date().getFullYear());
+  const anios = [...new Set([...lista("ingresos"), ...lista("egresos")].map(x => String(x.fecha).slice(0,4)).filter(a => /^\d{4}$/.test(a)).concat([anioAct]))].sort().reverse();
+  const sa = $("rAnio"), prev = sa.dataset.init ? sa.value : anioAct;
+  sa.innerHTML = `<option value="">Todos los años</option>` + anios.map(a => `<option ${a===prev?"selected":""}>${a}</option>`).join("");
+  sa.value = anios.includes(prev) ? prev : ""; sa.dataset.init = "1";
+  const sm = $("rMes"); if(!sm.options.length) sm.innerHTML = `<option value="">Todo el año</option>` + MESES.map((m,i) => `<option value="${pad(i+1)}">${m}</option>`).join("");
+  const A = sa.value, M = sm.value, I = $("rInm").value;
+  const ok = x => (!A || String(x.fecha).slice(0,4) === A) && (!M || String(x.fecha).slice(5,7) === M) && (!I || x.inmuebleId === I);
+  const ing = lista("ingresos").filter(ok), egr = lista("egresos").filter(ok);
+  const tI = sum(ing), tE = sum(egr), tP = sum(lista("egresos").filter(e => e.estado==="Pendiente" && (!I || e.inmuebleId===I)));
+  $("kIng").textContent = fmt(tI); $("kEgr").textContent = fmt(tE); $("kPend").textContent = fmt(tP);
+  $("kBal").textContent = fmt(tI - tE); $("kBal").className = "v " + (tI - tE >= 0 ? "pos" : "neg");
+  const inms = inmOrdenados().filter(i => !I || i.id === I);
+  $("resInm").innerHTML = !inms.length ? `<div class="empty">Registra tus inmuebles en la pestaña <b>Inmuebles</b>.</div>` :
+    inms.map(i => { const a = sum(ing.filter(x => x.inmuebleId===i.id)), b = sum(egr.filter(x => x.inmuebleId===i.id));
+      return `<div class="item" data-inm="${esc(i.id)}"><div class="tx"><div class="t1">${esc(etq(i.id))}</div><div class="t2"><span class="pos">+${fmt(a)}</span> · <span class="neg">−${fmt(b)}</span></div></div><div class="amt ${a-b>=0?"pos":"neg"}">${fmt(a-b)}</div></div>`; }).join("");
+  $("resInm").querySelectorAll("[data-inm]").forEach(el => el.onclick = () => abrirDetalle(el.dataset.inm, "datos"));
+  const cons = [...new Set(CON_EGR.concat(egr.map(e => e.concepto)))].map(c => [c, sum(egr.filter(e => e.concepto===c))]).filter(x => x[1] > 0).sort((a,b) => b[1]-a[1]);
+  $("resCon").innerHTML = !cons.length ? `<div class="empty">Sin egresos en este periodo.</div>` :
+    cons.map(([c,v]) => `<div class="conrow"><div class="h"><span>${ICON_EGR[c]||"📌"} ${esc(c)}</span><b>${fmt(v)} <span style="font-weight:400;color:var(--muted);font-size:12px">${(v/tE*100).toFixed(0)}%</span></b></div><div class="bar"><i style="width:${(v/cons[0][1]*100).toFixed(1)}%"></i></div></div>`).join("");
+}
+
+/* =====================================================================
+   AVISOS (configuración y conexión)
+   ===================================================================== */
+function renderAviso(){
+  const n = $("notice");
+  if(!CLIENT_ID){
+    n.innerHTML = `<div class="notice info"><b>Conecta tu OneDrive (una sola vez).</b><br>
+      Pega el <b>Id. de aplicación (cliente)</b> que te dio Microsoft al registrar la app. En el registro, la URI de redirección debe ser exactamente:
+      <code class="uri">${esc(REDIRECT)}</code>
+      <input id="cfgId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
+      <div class="btns"><button class="btn" id="cfgOk">Guardar y conectar</button></div>
+      <div class="t2" style="white-space:normal;margin-top:8px">Mientras tanto puedes usar la app: los datos quedan en este celular y se suben cuando conectes.</div></div>`;
+    $("cfgOk").onclick = () => {
+      const v = $("cfgId").value.trim();
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return toast("Ese ID no tiene el formato correcto");
+      try{ localStorage.setItem("mi_clientId", v); }catch(e){}
+      location.reload();
+    };
+    return;
+  }
+  if(authError){
+    n.innerHTML = `<div class="notice err"><b>No se pudo conectar con Microsoft.</b><br>${esc(authError.errorMessage || authError.message || authError)}<br>
+      Revisa que la URI de redirección registrada sea: <code class="uri">${esc(REDIRECT)}</code>
+      <div class="btns"><button class="btn sec" id="bReint">Intentar de nuevo</button></div></div>`;
+    $("bReint").onclick = iniciarSesion; return;
+  }
+  if(!cuenta){
+    n.innerHTML = `<div class="notice info"><b>Inicia sesión con tu cuenta de Microsoft</b> para guardar todo en tu OneDrive y verlo en todos tus dispositivos.
+      <div class="btns"><button class="btn" id="bLogin">Conectar OneDrive</button></div></div>`;
+    $("bLogin").onclick = iniciarSesion; return;
+  }
+  n.innerHTML = "";
+}
+
+/* =====================================================================
+   MENÚ: cuenta, Excel, importación
+   ===================================================================== */
+$("btnSync").onclick = () => { if(!cuenta) return toast("Primero conecta OneDrive"); sincronizar().then(() => { if(estadoSync==="ok") toast("OneDrive al día ✔"); }); };
+$("btnMenu").onclick = () => {
+  abrirHoja(`<h3>Opciones</h3>
+    <div class="t2" style="white-space:normal;margin-bottom:6px">${cuenta ? `Conectada como <b>${esc(cuenta.username)}</b>${meta.lastSync?` · última sincronización ${new Date(meta.lastSync).toLocaleString("es-CO")}`:""}` : "Sin conectar a OneDrive"}</div>
+    <div class="menu-item" id="mXlsOD"><span style="font-size:22px">☁️</span><div>Guardar copia en Excel en OneDrive<small>Crea “Mis_Inmuebles.xlsx” en la carpeta de la app en tu OneDrive.</small></div></div>
+    <div class="menu-item" id="mXls"><span style="font-size:22px">📤</span><div>Descargar Excel<small>Inmuebles, administración, ingresos, egresos e inventario.</small></div></div>
+    <div class="menu-item" id="mImp"><span style="font-size:22px">📥</span><div>Importar desde Excel<small>Carga un archivo exportado por esta app (o por la versión anterior en Claude).</small></div></div>
+    ${cuenta ? `<div class="menu-item" id="mOut"><span style="font-size:22px">🚪</span><div>Cerrar sesión de Microsoft</div></div>`
+             : (CLIENT_ID ? `<div class="menu-item" id="mIn"><span style="font-size:22px">🔐</span><div>Conectar OneDrive</div></div>` : "")}
+    ${CLIENT_ID && !(window.APP_CONFIG && window.APP_CONFIG.clientId) ? `<div class="menu-item" id="mCfg"><span style="font-size:22px">⚙️</span><div>Cambiar ID de la aplicación<small>Solo si registraste la app de nuevo en Microsoft.</small></div></div>` : ""}
+    <div class="btns"><button class="btn sec" id="mCer">Cerrar</button></div>`);
+  $("mCer").onclick = cerrarHoja;
+  $("mXls").onclick = () => { cerrarHoja(); descargarExcel(); };
+  $("mXlsOD").onclick = () => { cerrarHoja(); excelAOneDrive(); };
+  $("mImp").onclick = () => { cerrarHoja(); $("fileImport").value = ""; $("fileImport").click(); };
+  if($("mOut")) $("mOut").onclick = cerrarSesion;
+  if($("mIn")) $("mIn").onclick = iniciarSesion;
+  if($("mCfg")) $("mCfg").onclick = () => { try{ localStorage.removeItem("mi_clientId"); }catch(e){} location.reload(); };
+};
+
+function libroExcel(){
+  const wb = XLSX.utils.book_new();
+  const hoja = (rows, hdr, name) => { const ws = XLSX.utils.json_to_sheet(rows, { header: hdr }); ws["!cols"] = hdr.map(h => ({ wch: /Inmueble|Notas|Observ|Descrip|Conjunto|Administrador|Empresa|Correo/.test(h) ? 28 : 14 })); XLSX.utils.book_append_sheet(wb, ws, name); };
+  hoja(inmOrdenados().map(i => { const a = i.admin || {}; return { ID:i.id, Conjunto:i.conjunto, Torre:i.torre, Apartamento:i.apartamento, Propietario:i.propietario||"", Ciudad:i.ciudad||"", Notas:i.notas||"",
+      Administrador:a.nombre||"", Empresa_Admin:a.empresa||"", Telefono_Admin:a.telefono||"", Correo_Admin:a.correo||"", Cuota_Admin:a.cuota||"", Dia_Pago:a.diaPago||"", Referencia_Pago:a.referencia||"", Notas_Admin:a.notas||"" }; }),
+    ["ID","Conjunto","Torre","Apartamento","Propietario","Ciudad","Notas","Administrador","Empresa_Admin","Telefono_Admin","Correo_Admin","Cuota_Admin","Dia_Pago","Referencia_Pago","Notas_Admin"], "Inmuebles");
+  hoja(lista("ingresos").sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(g => ({ ID:g.id, Fecha:g.fecha, ID_Inmueble:g.inmuebleId, Inmueble:etq(g.inmuebleId), Concepto:g.concepto, Valor:+g.valor||0, Medio_Pago:g.medio||"", Notas:g.notas||"" })),
+    ["ID","Fecha","ID_Inmueble","Inmueble","Concepto","Valor","Medio_Pago","Notas"], "Ingresos");
+  hoja(lista("egresos").sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(e => ({ ID:e.id, Fecha:e.fecha, ID_Inmueble:e.inmuebleId, Inmueble:etq(e.inmuebleId), Concepto:e.concepto, Periodo:e.periodo||"", Valor:+e.valor||0, Estado:e.estado||"", Notas:e.notas||"" })),
+    ["ID","Fecha","ID_Inmueble","Inmueble","Concepto","Periodo","Valor","Estado","Notas"], "Egresos");
+  hoja(lista("inventario").sort((a,b) => (etq(a.inmuebleId)+a.espacio+a.nombre).localeCompare(etq(b.inmuebleId)+b.espacio+b.nombre, "es")).map(x => ({ ID:x.id, ID_Inmueble:x.inmuebleId, Inmueble:etq(x.inmuebleId), Espacio:x.espacio||"", Elemento:x.nombre, Cantidad:Number(x.cantidad)||1, Estado:x.estado||"", Descripcion:x.descripcion||"", Observaciones:x.observaciones||"", Foto:x.foto ? "fotos/" + x.foto : "" })),
+    ["ID","ID_Inmueble","Inmueble","Espacio","Elemento","Cantidad","Estado","Descripcion","Observaciones","Foto"], "Inventario");
+  return XLSX.write(wb, { bookType:"xlsx", type:"array" });
+}
+async function descargarExcel(){
+  if(typeof XLSX === "undefined") return toast("El componente de Excel aún está cargando");
+  const nombre = `Mis_Inmuebles_${hoy()}.xlsx`;
+  const blob = new Blob([libroExcel()], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const file = new File([blob], nombre, { type: blob.type });
+  if(navigator.canShare && navigator.canShare({ files:[file] })){
+    try{ await navigator.share({ files:[file], title:nombre }); return; }catch(e){ if(e.name === "AbortError") return; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+async function excelAOneDrive(){
+  if(!cuenta) return toast("Primero conecta OneDrive");
+  if(typeof XLSX === "undefined") return toast("El componente de Excel aún está cargando");
+  try{
+    toast("Guardando Excel en OneDrive…");
+    const r = await graph(`${AROOT}:/Mis_Inmuebles.xlsx:/content`, { method:"PUT", headers:{ "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, body: libroExcel() });
+    if(r.status === 423) return toast("El Excel está abierto en otro lado. Ciérralo e intenta de nuevo.");
+    if(!r.ok) throw new Error(r.status);
+    toast("Excel guardado en OneDrive ✔");
+  }catch(e){ toast("No se pudo guardar el Excel en OneDrive"); }
+}
+$("fileImport").onchange = async ev => {
+  const f = ev.target.files[0]; if(!f) return;
+  if(typeof XLSX === "undefined") return toast("El componente de Excel aún está cargando");
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), { type:"array" });
+    const h = n => wb.Sheets[n] ? XLSX.utils.sheet_to_json(wb.Sheets[n], { defval:"", raw:false }) : [];
+    const num = v => Number(String(v).replace(/[^\d.-]/g, "")) || 0;
+    const s = v => String(v ?? "").trim();
+    const okId = v => s(v) || uid();
+    const inm = h("Inmuebles").filter(r => r.Conjunto).map(r => ({ id:okId(r.ID), conjunto:s(r.Conjunto), torre:s(r.Torre), apartamento:s(r.Apartamento), propietario:s(r.Propietario), ciudad:s(r.Ciudad), notas:s(r.Notas),
+      admin:{ nombre:s(r.Administrador), empresa:s(r.Empresa_Admin), telefono:s(r.Telefono_Admin), correo:s(r.Correo_Admin), cuota:num(r.Cuota_Admin)||"", diaPago:num(r.Dia_Pago)||"", referencia:s(r.Referencia_Pago), notas:s(r.Notas_Admin) } }));
+    const ing = h("Ingresos").filter(r => r.Fecha).map(r => ({ id:okId(r.ID), fecha:s(r.Fecha).slice(0,10), inmuebleId:s(r.ID_Inmueble), concepto:s(r.Concepto)||"Otro", valor:num(r.Valor), medio:s(r.Medio_Pago), notas:s(r.Notas) }));
+    const egr = h("Egresos").filter(r => r.Fecha).map(r => ({ id:okId(r.ID), fecha:s(r.Fecha).slice(0,10), inmuebleId:s(r.ID_Inmueble), concepto:s(r.Concepto)||"Otro", periodo:s(r.Periodo), valor:num(r.Valor), estado:s(r.Estado)||"Pagado", notas:s(r.Notas) }));
+    const inv = h("Inventario").filter(r => r.Elemento).map(r => ({ id:okId(r.ID), inmuebleId:s(r.ID_Inmueble), espacio:s(r.Espacio)||"General", nombre:s(r.Elemento), cantidad:num(r.Cantidad)||1, estado:s(r.Estado)||"Bueno", descripcion:s(r.Descripcion), observaciones:s(r.Observaciones), foto:s(r.Foto).replace(/^fotos\//, "") }));
+    if(!(await confirmar(`Se cargarán ${inm.length} inmuebles, ${ing.length} ingresos, ${egr.length} egresos y ${inv.length} elementos de inventario. Los registros con el mismo ID se reemplazan.`, "Importar"))) return;
+    const t = Date.now();
+    for(const [c, arr] of [["inmuebles",inm],["ingresos",ing],["egresos",egr],["inventario",inv]]) for(const r of arr){ r.upd = t; D[c][r.id] = r; }
+    meta.dirty = true; await guardarLocal(); renderTodo(); programarSync(200);
+    toast(`Importación lista ✔`);
+  }catch(e){ console.error(e); toast("El archivo no tiene el formato esperado"); }
+};
+
+/* =====================================================================
+   RENDER GENERAL E INICIO
+   ===================================================================== */
+function renderTodo(){
+  for(const id of ["fgInm","feInm","rInm"]){ const s = $(id), v = s.value; s.innerHTML = opcInm(v, true); if([...s.options].some(o => o.value === v)) s.value = v; }
+  const fc = $("feCon"), vc = fc.value; fc.innerHTML = `<option value="">Todos los conceptos</option>` + CON_EGR.map(c => `<option>${c}</option>`).join(""); fc.value = vc;
+  renderResumen(); renderInmuebles(); renderIngresos(); renderEgresos();
+  if(inmActual) renderDetalle();
+  renderAviso(); pintarEstado();
+}
+["rAnio","rMes","rInm"].forEach(id => $(id).onchange = renderResumen);
+["fgMes","fgInm"].forEach(id => $(id).onchange = renderIngresos);
+["feMes","feInm","feCon","feEst"].forEach(id => $(id).onchange = renderEgresos);
+window.addEventListener("online", () => { pintarEstado(); programarSync(300); });
+window.addEventListener("offline", pintarEstado);
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible" && cuenta) programarSync(500); });
+
+(async () => {
+  const d = await IDB.get("datos"), m = await IDB.get("meta");
+  if(d) D = fusionar(d, {});
+  if(m) meta = { ...meta, ...m, pendFotos: m.pendFotos || [] };
+  renderTodo();
+  await iniciarAuth();
+  renderTodo();
+  if(cuenta) sincronizar();
+  if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
+</script>
+</body>
+</html>
